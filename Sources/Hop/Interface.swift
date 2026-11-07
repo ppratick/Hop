@@ -1,6 +1,47 @@
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
+import ServiceManagement
+
+struct LoginItemSetting: View {
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var status = SMAppService.mainApp.status
+    @State private var error = ""
+    var body: some View {
+        Section("Startup") {
+            Toggle("Open Hop at login", isOn: Binding(
+                get: { status == .enabled || status == .requiresApproval },
+                set: { enabled in
+                    error = ""
+                    do {
+                        if enabled { try SMAppService.mainApp.register() }
+                        else { try SMAppService.mainApp.unregister() }
+                    } catch {
+                        self.error = "Couldn’t update login setting: " + error.localizedDescription
+                    }
+                    status = SMAppService.mainApp.status
+                }
+            ))
+            Text("Starts quietly in the menu bar. Settings stays closed.")
+                .font(.caption).foregroundStyle(.secondary)
+            if status == .requiresApproval {
+                HStack {
+                    Text("Allow Hop in macOS Login Items to finish enabling startup.").font(.caption)
+                    Spacer()
+                    Button("Open Login Items…") { SMAppService.openSystemSettingsLoginItems() }
+                }
+            }
+            if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.orange) }
+        }
+        .onAppear { status = SMAppService.mainApp.status }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { status = SMAppService.mainApp.status }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            status = SMAppService.mainApp.status
+        }
+    }
+}
 
 struct MessageBanner: View {
     @ObservedObject var store: Store
@@ -424,6 +465,7 @@ struct SettingsView: View {
     }
     var general: some View {
         Form {
+            LoginItemSetting()
             if !store.pendingProjects.isEmpty {
                 Section("New projects to review") {
                     ForEach(store.pendingProjects) { project in
