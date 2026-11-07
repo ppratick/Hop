@@ -174,7 +174,20 @@ func scan(_ root: String, manualPaths: [String] = []) -> [Project] {
     @Published var disk = DiskState()
     @Published var projects: [Project] = []
     @Published var scanning = false
-    @Published var message = ""
+    @Published var message = "" {
+        didSet {
+            messageDismissal?.cancel()
+            guard !message.isEmpty else { return }
+            if !message.hasPrefix("Removed ") { lastRemovedPath = nil }
+            let delay: UInt64 = message.hasPrefix("Removed ") ? 10 : (message == "Pushed successfully." ? 4 : 8)
+            messageDismissal = Task { [weak self] in
+                do { try await Task.sleep(nanoseconds: delay * 1_000_000_000) }
+                catch { return }
+                withAnimation(.easeInOut(duration: 0.2)) { self?.message = "" }
+            }
+        }
+    }
+    private var messageDismissal: Task<Void, Never>?
     @Published var phases: [String: String] = [:]
     @Published var external: Set<String> = []
     @Published var commitProject: Project?

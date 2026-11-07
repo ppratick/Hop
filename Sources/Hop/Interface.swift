@@ -2,6 +2,46 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+struct MessageBanner: View {
+    @ObservedObject var store: Store
+    private var success: Bool { store.message == "Pushed successfully." }
+    private var informational: Bool { store.message.hasPrefix("Removed ") || store.message.contains("is already running") }
+    private var failure: Bool {
+        let text = store.message.lowercased()
+        return ["failed", "couldn’t", "couldn't", "error", "terminal:"].contains { text.contains($0) }
+    }
+    private var tint: Color { success ? .green : informational ? .blue : failure ? .red : .orange }
+    private var symbol: String { success ? "checkmark.circle.fill" : informational ? "info.circle.fill" : failure ? "exclamationmark.circle.fill" : "exclamationmark.triangle.fill" }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: symbol)
+                .font(.system(size: 14, weight: .semibold)).foregroundStyle(tint)
+                .frame(width: 28, height: 28)
+                .background(tint.opacity(0.12), in: Circle())
+            Text(store.message)
+                .font(.system(size: 12, weight: .medium)).foregroundStyle(.primary)
+                .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
+            if let path = store.lastRemovedPath {
+                Button("Undo") { store.restoreProject(path) }
+                    .buttonStyle(.borderless).font(.system(size: 12, weight: .semibold))
+                    .padding(.top, 6)
+            }
+            Button { withAnimation { store.message = "" } } label: {
+                Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary).frame(width: 24, height: 28)
+                    .contentShape(Rectangle())
+            }.buttonStyle(.plain).help("Dismiss message").accessibilityLabel("Dismiss message")
+        }
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(tint.opacity(0.045)).allowsHitTesting(false))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(tint.opacity(0.22), lineWidth: 1).allowsHitTesting(false))
+        .shadow(color: .black.opacity(0.08), radius: 8, y: 3)
+    }
+}
+
 func hopMark(size: CGFloat = 18, color: NSColor = .black) -> NSImage {
     let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
         color.setStroke()
@@ -145,15 +185,13 @@ struct RootView: View {
                 .fixedSize()
                 .help("Choose project sort order")
             }.padding(.horizontal, 20).padding(.bottom, 12)
-            if !store.message.isEmpty {
-                HStack(alignment: .top) {
-                    Image(systemName: "info.circle").foregroundStyle(.orange)
-                    Text(store.message).font(.caption).textSelection(.enabled)
-                    if let path = store.lastRemovedPath { Button("Undo") { store.restoreProject(path) }.buttonStyle(.borderless).font(.caption) }
-                    Spacer()
-                    Button { store.message = "" } label: { Image(systemName: "xmark") }.buttonStyle(.plain)
-                }.padding(10).background(.orange.opacity(0.08)).padding(.horizontal, 12).padding(.bottom, 8)
-            }
+            Group {
+                if !store.message.isEmpty {
+                    MessageBanner(store: store)
+                        .padding(.horizontal, 16).padding(.bottom, 12)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }.animation(.easeInOut(duration: 0.2), value: store.message)
             Divider()
             OrganizationList(store: store, scope: "menu") {
                 LazyVStack(spacing: 8) {
@@ -333,9 +371,13 @@ struct SettingsView: View {
                     Spacer()
                     if store.scanning { ProgressView().controlSize(.small) }
                 }.padding(30)
-                if !store.message.isEmpty {
-                    HStack { Text(store.message).font(.caption).foregroundStyle(.orange); if let path = store.lastRemovedPath { Button("Undo") { store.restoreProject(path) } }; Spacer(); Button { store.message = "" } label: { Image(systemName: "xmark") }.buttonStyle(.plain) }.padding(.horizontal, 26).padding(.bottom, 8)
-                }
+                Group {
+                    if !store.message.isEmpty {
+                        MessageBanner(store: store)
+                            .padding(.horizontal, 26).padding(.bottom, 12)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                }.animation(.easeInOut(duration: 0.2), value: store.message)
                 if let project = selectedProject { ProjectSettings(store: store, project: project) }
                 else { general }
             }.frame(maxWidth: .infinity, maxHeight: .infinity).background(HopCanvas())
