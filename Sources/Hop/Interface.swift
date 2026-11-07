@@ -67,9 +67,16 @@ func writeAppIcon(to path: String) {
     NSGraphicsContext.saveGraphicsState(); NSGraphicsContext.current = context
     NSColor.clear.setFill(); NSRect(x: 0, y: 0, width: 1024, height: 1024).fill()
     let tile = NSBezierPath(roundedRect: NSRect(x: 64, y: 64, width: 896, height: 896), xRadius: 210, yRadius: 210)
-    NSGradient(starting: NSColor(calibratedWhite: 0.08, alpha: 1), ending: NSColor(calibratedWhite: 0.23, alpha: 1))?.draw(in: tile, angle: 55)
-    let mark = hopMark(size: 500, color: .white); mark.isTemplate = false
-    mark.draw(in: NSRect(x: 262, y: 262, width: 500, height: 500))
+    NSGradient(
+        starting: NSColor(calibratedRed: 0.06, green: 0.26, blue: 0.78, alpha: 1),
+        ending: NSColor(calibratedRed: 0.20, green: 0.60, blue: 1.0, alpha: 1)
+    )?.draw(in: tile, angle: 90)
+    let rim = NSBezierPath(roundedRect: NSRect(x: 66, y: 66, width: 892, height: 892), xRadius: 208, yRadius: 208)
+    NSColor.white.withAlphaComponent(0.18).setStroke()
+    rim.lineWidth = 3
+    rim.stroke()
+    let mark = hopMark(size: 620, color: .white); mark.isTemplate = false
+    mark.draw(in: NSRect(x: 171, y: 202, width: 620, height: 620))
     NSGraphicsContext.restoreGraphicsState()
     if let data = bitmap.representation(using: .png, properties: [:]) { try? data.write(to: URL(fileURLWithPath: path)) }
 }
@@ -121,7 +128,7 @@ private struct HopCard: ViewModifier {
 struct BrandMark: View {
     var size: CGFloat = 30
     var body: some View {
-        Image(nsImage: hopMark(size: size)).renderingMode(.template).foregroundStyle(.primary).padding(size * 0.22).background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: size * 0.32)).overlay(RoundedRectangle(cornerRadius: size * 0.32).strokeBorder(.white.opacity(0.12)))
+        Image(nsImage: hopMark(size: size)).renderingMode(.template).foregroundStyle(.white).padding(size * 0.22).background(LinearGradient(colors: [Color(red: 0.20, green: 0.60, blue: 1.0), Color(red: 0.06, green: 0.26, blue: 0.78)], startPoint: .top, endPoint: .bottom), in: RoundedRectangle(cornerRadius: size * 0.32)).overlay(RoundedRectangle(cornerRadius: size * 0.32).strokeBorder(.white.opacity(0.12)))
     }
 }
 struct RootView: View {
@@ -632,6 +639,7 @@ struct NewProjectReview: View {
     var store: Store!
     var settingsWindow: NSWindow?
     func applicationDidFinishLaunching(_ notification: Notification) {
+
         if let index = CommandLine.arguments.firstIndex(of: "--test-profile"), CommandLine.arguments.count > index + 1 {
             store = Store(storage: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
         } else { store = Store() }
@@ -647,6 +655,18 @@ struct NewProjectReview: View {
         popover.contentViewController = NSHostingController(rootView: RootView(store: store).preferredColorScheme(.dark))
         if CommandLine.arguments.contains("--settings") { openSettings(nil) }
         else if CommandLine.arguments.contains("--show") { toggle() }
+    }
+    func updateDockIcon() {
+        guard let url = Bundle.main.url(forResource: "HopIcon", withExtension: "icns"),
+              let data = try? Data(contentsOf: url),
+              let icon = NSImage(data: data) else { return }
+        NSApp.applicationIconImage = icon
+        let tile = NSApp.dockTile
+        let imageView = NSImageView(frame: NSRect(origin: .zero, size: tile.size))
+        imageView.image = icon
+        imageView.imageScaling = .scaleProportionallyUpOrDown
+        tile.contentView = imageView
+        tile.display()
     }
     func installMainMenu() {
         let menu = NSMenu()
@@ -678,6 +698,8 @@ struct NewProjectReview: View {
             settingsWindow = window
         }
         NSApp.setActivationPolicy(.regular)
+        updateDockIcon()
+        DispatchQueue.main.async { [weak self] in self?.updateDockIcon() }
         NSApp.activate(ignoringOtherApps: true); settingsWindow?.makeKeyAndOrderFront(nil)
     }
     func windowWillClose(_ notification: Notification) { if (notification.object as? NSWindow) === settingsWindow { NSApp.setActivationPolicy(.accessory) } }
