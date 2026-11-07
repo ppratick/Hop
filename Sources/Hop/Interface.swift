@@ -6,15 +6,17 @@ func hopMark(size: CGFloat = 18, color: NSColor = .black) -> NSImage {
     let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
         color.setStroke()
         let transform = AffineTransform(scale: size / 20)
-        let first = NSBezierPath()
-        first.move(to: NSPoint(x: 3, y: 5)); first.line(to: NSPoint(x: 6, y: 5))
-        first.curve(to: NSPoint(x: 13, y: 15), controlPoint1: NSPoint(x: 11, y: 5), controlPoint2: NSPoint(x: 8, y: 15))
-        first.line(to: NSPoint(x: 17, y: 15)); first.move(to: NSPoint(x: 14, y: 12)); first.line(to: NSPoint(x: 17, y: 15)); first.line(to: NSPoint(x: 14, y: 18))
-        let second = NSBezierPath()
-        second.move(to: NSPoint(x: 3, y: 15)); second.line(to: NSPoint(x: 6, y: 15))
-        second.curve(to: NSPoint(x: 13, y: 5), controlPoint1: NSPoint(x: 11, y: 15), controlPoint2: NSPoint(x: 8, y: 5))
-        second.line(to: NSPoint(x: 17, y: 5)); second.move(to: NSPoint(x: 14, y: 2)); second.line(to: NSPoint(x: 17, y: 5)); second.line(to: NSPoint(x: 14, y: 8))
-        for path in [first, second] { path.transform(using: transform); path.lineWidth = size / 10; path.lineCapStyle = .round; path.lineJoinStyle = .round; path.stroke() }
+        let path = NSBezierPath()
+        path.move(to: NSPoint(x: 3, y: 5))
+        path.curve(to: NSPoint(x: 16, y: 7), controlPoint1: NSPoint(x: 3, y: 18), controlPoint2: NSPoint(x: 16, y: 18))
+        path.move(to: NSPoint(x: 12, y: 11))
+        path.line(to: NSPoint(x: 16, y: 7))
+        path.line(to: NSPoint(x: 19, y: 12))
+        path.transform(using: transform)
+        path.lineWidth = size / 9
+        path.lineCapStyle = .round
+        path.lineJoinStyle = .round
+        path.stroke()
         return true
     }
     image.isTemplate = true
@@ -25,17 +27,61 @@ func writeAppIcon(to path: String) {
     NSGraphicsContext.saveGraphicsState(); NSGraphicsContext.current = context
     NSColor.clear.setFill(); NSRect(x: 0, y: 0, width: 1024, height: 1024).fill()
     let tile = NSBezierPath(roundedRect: NSRect(x: 64, y: 64, width: 896, height: 896), xRadius: 210, yRadius: 210)
-    NSGradient(starting: NSColor(calibratedRed: 0.02, green: 0.38, blue: 0.43, alpha: 1), ending: NSColor(calibratedRed: 0.12, green: 0.82, blue: 0.76, alpha: 1))?.draw(in: tile, angle: 55)
+    NSGradient(starting: NSColor(calibratedWhite: 0.08, alpha: 1), ending: NSColor(calibratedWhite: 0.23, alpha: 1))?.draw(in: tile, angle: 55)
     let mark = hopMark(size: 500, color: .white); mark.isTemplate = false
     mark.draw(in: NSRect(x: 262, y: 262, width: 500, height: 500))
     NSGraphicsContext.restoreGraphicsState()
     if let data = bitmap.representation(using: .png, properties: [:]) { try? data.write(to: URL(fileURLWithPath: path)) }
 }
 
+private struct HopGlass: ViewModifier {
+    var radius: CGFloat = 16
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    func body(content: Content) -> some View {
+        if reduceTransparency {
+            content.background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: radius))
+        } else if #available(macOS 26.0, *) {
+            content.glassEffect(.regular, in: RoundedRectangle(cornerRadius: radius))
+        } else {
+            content.background(.regularMaterial, in: RoundedRectangle(cornerRadius: radius))
+        }
+    }
+}
+
+private struct HopLaunchStyle: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            content.buttonStyle(.glassProminent).controlSize(.large)
+        } else {
+            content.buttonStyle(.borderedProminent).controlSize(.large)
+        }
+    }
+}
+
+private struct HopCanvas: View {
+    var body: some View {
+        Rectangle()
+            .fill(.ultraThinMaterial)
+            .overlay(Color.black.opacity(0.28))
+
+    }
+}
+
+private struct HopCard: ViewModifier {
+    var selected = false
+    func body(content: Content) -> some View {
+        content
+            .background(Color.white.opacity(selected ? 0.09 : 0.045), in: RoundedRectangle(cornerRadius: 14))
+            .shadow(color: .black.opacity(selected ? 0.05 : 0.02), radius: 6, y: 2)
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(selected ? Color.primary.opacity(0.2) : Color.primary.opacity(0.08), lineWidth: 1))
+            
+    }
+}
+
 struct BrandMark: View {
     var size: CGFloat = 30
     var body: some View {
-        Image(nsImage: hopMark(size: size)).renderingMode(.template).foregroundStyle(.white).padding(size * 0.22).background(LinearGradient(colors: [.teal, .cyan.opacity(0.75)], startPoint: .bottomLeading, endPoint: .topTrailing), in: RoundedRectangle(cornerRadius: size * 0.32))
+        Image(nsImage: hopMark(size: size)).renderingMode(.template).foregroundStyle(.primary).padding(size * 0.22).background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: size * 0.32)).overlay(RoundedRectangle(cornerRadius: size * 0.32).strokeBorder(.white.opacity(0.12)))
     }
 }
 struct RootView: View {
@@ -50,21 +96,55 @@ struct RootView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                BrandMark(size: 22)
+                BrandMark(size: 26)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Hop").font(.system(size: 17, weight: .bold, design: .rounded))
+                    Text("Hop").font(.system(size: 22, weight: .bold, design: .rounded))
                     Text(query.isEmpty ? "\(visible.count) projects" : "\(visible.count) matching projects").font(.system(size: 10)).foregroundStyle(.secondary)
                 }
                 Spacer()
                 if store.scanning { ProgressView().controlSize(.small) }
-                AddProjectMenu(store: store)
-                Button { store.showSettings?(nil) } label: { Image(systemName: "gearshape") }.buttonStyle(.borderless).help("Open Hop settings")
-            }.padding(16)
+                HStack(spacing: 16) {
+                    AddProjectMenu(store: store)
+                    Button { store.showSettings?(nil) } label: {
+                        Image(systemName: "gearshape").frame(width: 24, height: 24)
+                    }.buttonStyle(.plain).help("Open Hop settings").accessibilityLabel("Settings")
+                    Button { store.quit() } label: {
+                        Image(systemName: "power").frame(width: 24, height: 24)
+                    }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut("q", modifiers: .command)
+                    .help("Quit Hop")
+                    .accessibilityLabel("Quit Hop")
+                }.padding(.horizontal, 12).padding(.vertical, 7).modifier(HopGlass(radius: 24))
+            }.padding(20)
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("Find a project…", text: $query).textFieldStyle(.plain)
                 if !query.isEmpty { Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain) }
-            }.padding(10).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 9)).padding(.horizontal, 14).padding(.bottom, 12)
+            }.padding(12).modifier(HopGlass(radius: 24)).padding(.horizontal, 20).padding(.bottom, 16)
+            HStack {
+                Text("PROJECTS").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
+                Spacer()
+                Menu {
+                    Picker("Sort by", selection: Binding(get: { store.disk.order }, set: { value in
+                        store.changeSettings { $0.order = value }
+                    })) {
+                        ForEach(ProjectOrder.allCases) { order in
+                            Text(order.title).tag(order)
+                        }
+                    }
+                    Divider()
+                    Toggle("Pinned projects first", isOn: Binding(get: { store.disk.pinnedFirst }, set: { value in
+                        store.changeSettings { $0.pinnedFirst = value }
+                    }))
+                } label: {
+                    Label(store.disk.order.title, systemImage: "arrow.up.arrow.down")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Choose project sort order")
+            }.padding(.horizontal, 20).padding(.bottom, 12)
             if !store.message.isEmpty {
                 HStack(alignment: .top) {
                     Image(systemName: "info.circle").foregroundStyle(.orange)
@@ -90,13 +170,14 @@ struct RootView: View {
                         if (folder != nil && query.isEmpty) || !members.isEmpty || store.draggingProject != nil || store.draggingFolder != nil {
                             FolderHeader(store: store, folder: folder, count: members.count)
                             if !store.disk.collapsedFolders.contains(groupID) || !query.isEmpty {
-                                projectRows(members).padding(.leading, 14)
+                                projectRows(members).padding(.leading, 18)
                             }
                         }
                     }
-                }.padding(12)
+                }.padding(16)
             }
-        }.frame(width: 440, height: 680).background(.regularMaterial)
+        }.frame(width: 440, height: 680).background(HopCanvas()).tint(.blue)
+        .sheet(item: $store.commitProject) { project in GitCommitSheet(store: store, project: project) }
     }
     func projectRows(_ projects: [Project]) -> some View {
         VStack(spacing: 8) {
@@ -114,9 +195,9 @@ struct RootView: View {
         return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 Button { withAnimation(.easeInOut(duration: 0.15)) { store.expanded = isOpen ? nil : p.id } } label: {
-                    HStack(spacing: 9) {
+                    HStack(spacing: 11) {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(store.name(p)).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                            Text(store.name(p)).font(.system(size: 14, weight: .semibold)).lineLimit(1)
                             HStack(spacing: 5) {
                                 if !p.branch.isEmpty {
                                     Image(systemName: "arrow.triangle.branch")
@@ -128,13 +209,18 @@ struct RootView: View {
                         }
                         Spacer(minLength: 0)
                         if pref.pinned { Image(systemName: "pin.fill").font(.system(size: 9)).foregroundStyle(.secondary) }
-                        if running { Circle().fill(.green).frame(width: 6, height: 6) }
+                        if running { Label("Running", systemImage: "circle.fill").font(.system(size: 9, weight: .medium)).foregroundStyle(.green).labelStyle(.titleAndIcon).help("A local service is running") }
                         Image(systemName: isOpen ? "chevron.up" : "chevron.down").font(.system(size: 9)).foregroundStyle(.secondary)
                     }.contentShape(Rectangle())
                 }.buttonStyle(.plain)
                 Menu {
                     Button(pref.pinned ? "Unpin" : "Pin to top") { store.update(p) { $0.pinned.toggle() } }
                     MoveToFolderMenu(store: store, project: p)
+                    if !p.branch.isEmpty {
+                        Button("Check for updates") { store.checkRemote(p) }.disabled(store.syncing.contains(p.id))
+                        Button("Pull latest") { store.checkRemote(p, pull: true) }.disabled(store.syncing.contains(p.id))
+                        Divider()
+                    }
                     Button("Project settings…") { store.showSettings?(p.id) }
                     Button("Reveal in Finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: p.path) }
                     Divider()
@@ -142,6 +228,7 @@ struct RootView: View {
                     Button("Remove from Hop", role: .destructive) { store.removeProject(p) }
                 } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 18)
             }.padding(12)
+            if !p.branch.isEmpty { GitActions(store: store, project: p) }
             if isOpen {
                 Divider().padding(.horizontal, 12)
                 VStack(alignment: .leading, spacing: 12) {
@@ -170,21 +257,34 @@ struct RootView: View {
                         if available.contains("website") { action(p, "website", "Deployed website", icon: "safari", detail: pref.website) }
                         if available.contains("github") { action(p, "github", "GitHub", icon: "chevron.left.forwardslash.chevron.right", detail: p.github.replacingOccurrences(of: "https://github.com/", with: "")) }
                     }
-                    Button { store.launch(p) } label: { Text(selected.isEmpty ? "Select actions to launch" : "Launch selected").fontWeight(.semibold).frame(maxWidth: .infinity).padding(.vertical, 5) }.buttonStyle(.borderedProminent).tint(.teal).disabled(selected.isEmpty)
-                    VStack(alignment: .leading, spacing: 5) {
-                        Label("WHERE I LEFT OFF", systemImage: "text.alignleft").font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
-                        TextField("Leave a note for next time…", text: Binding(get: { store.prefs(p).note }, set: { value in store.update(p) { $0.note = value } }), axis: .vertical).focused($focusedNote, equals: p.id).lineLimit(2...5).textFieldStyle(.plain).font(.caption).padding(9).background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
+                    Button { store.launch(p) } label: { Text(selected.isEmpty ? "Select actions to launch" : "Launch selected").fontWeight(.semibold).frame(maxWidth: .infinity).padding(.vertical, 8) }.modifier(HopLaunchStyle()).tint(.blue).disabled(selected.isEmpty)
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "square.and.pencil").foregroundStyle(.secondary)
+                            Text("Where I left off").fontWeight(.medium)
+                        }
+                        .font(.system(size: 12))
+                        TextField("Leave a note for next time…", text: Binding(get: { store.prefs(p).note }, set: { value in store.update(p) { $0.note = value } }), axis: .vertical)
+                            .focused($focusedNote, equals: p.id)
+                            .lineLimit(3...5)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 12))
+                            .lineSpacing(3)
+                            .accessibilityLabel("Where I left off")
                     }
+                    .padding(12)
+                    .background(Color(nsColor: .textBackgroundColor).opacity(0.6), in: RoundedRectangle(cornerRadius: 10))
+                    .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(focusedNote == p.id ? Color.primary.opacity(0.35) : Color.primary.opacity(0.08)))
                     Button("Project settings…") { store.showSettings?(p.id) }.font(.caption).buttonStyle(.borderless).frame(maxWidth: .infinity, alignment: .trailing)
                 }.padding(12)
             }
-        }.background(isOpen ? Color.primary.opacity(0.055) : Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 10))
+        }.modifier(HopCard(selected: isOpen))
     }
     func action(_ p: Project, _ id: String, _ title: String, icon: String, detail: String, enabled: Bool = true) -> some View {
         Toggle(isOn: Binding(get: { store.prefs(p).selected.contains(id) }, set: { checked in store.update(p) { if checked { $0.selected.insert(id) } else { $0.selected.remove(id) } } })) {
             HStack(spacing: 8) {
-                Image(systemName: icon).frame(width: 15).foregroundStyle(.secondary)
-                Text(title).font(.caption)
+                Image(systemName: icon).font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary).frame(width: 26, height: 26).background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 7))
+                Text(title).font(.system(size: 12, weight: .medium))
                 Spacer(minLength: 4)
                 Text(detail).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).frame(maxWidth: 170, alignment: .trailing).help(detail)
             }
@@ -200,12 +300,15 @@ struct SettingsView: View {
     var body: some View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 10) { BrandMark(size: 28); VStack(alignment: .leading) { Text("Hop").font(.headline); Text("Settings").font(.caption).foregroundStyle(.secondary) } }.padding(20)
+                HStack(spacing: 10) { BrandMark(size: 28); VStack(alignment: .leading) { Text("Hop").font(.system(size: 24, weight: .bold, design: .rounded)); Text("Settings").font(.caption).foregroundStyle(.secondary) } }.padding(20)
                 Button { store.settingsProject = nil } label: {
-                    Label("General", systemImage: "slider.horizontal.3").frame(maxWidth: .infinity, alignment: .leading).padding(10).background(store.settingsProject == nil ? Color.teal.opacity(0.16) : .clear, in: RoundedRectangle(cornerRadius: 7))
+                    Label("General", systemImage: "slider.horizontal.3").frame(maxWidth: .infinity, alignment: .leading).padding(10).background(store.settingsProject == nil ? Color.primary.opacity(0.09) : .clear, in: RoundedRectangle(cornerRadius: 7))
                 }.buttonStyle(.plain).padding(.horizontal, 10)
                 HStack { Text("PROJECTS").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary); Spacer(); AddProjectMenu(store: store) }.padding(.horizontal, 20).padding(.top, 24).padding(.bottom, 10)
-                TextField("Search projects", text: $filter).textFieldStyle(.roundedBorder).padding(.horizontal, 12).padding(.bottom, 8)
+                HStack(spacing: 7) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("Search projects", text: $filter).textFieldStyle(.plain)
+                }.padding(9).background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 9)).padding(.horizontal, 12).padding(.bottom, 12)
                 OrganizationList(store: store, scope: "settings") {
                     LazyVStack(spacing: 3) {
                         ForEach(store.orderedGroupIDs, id: \.self) { groupID in
@@ -218,25 +321,25 @@ struct SettingsView: View {
                         }
                     }.padding(.horizontal, 10)
                 }
-                Text("Changes save automatically").font(.system(size: 10)).foregroundStyle(.tertiary).padding(16)
-            }.frame(width: 260).background(.ultraThinMaterial)
+                Label("Changes saved automatically", systemImage: "checkmark.circle").font(.system(size: 11)).foregroundStyle(.tertiary).padding(16)
+            }.frame(width: 230).background(.ultraThinMaterial)
             Divider()
             VStack(alignment: .leading, spacing: 0) {
                 HStack {
                     VStack(alignment: .leading, spacing: 5) {
-                        Text(selectedProject.map { store.name($0) } ?? "General").font(.system(size: 25, weight: .bold, design: .rounded))
+                        Text(selectedProject.map { store.name($0) } ?? "General").font(.system(size: 28, weight: .bold))
                         Text(selectedProject == nil ? "Make Hop work your way." : "Editor, websites, and local services.").font(.callout).foregroundStyle(.secondary)
                     }
                     Spacer()
                     if store.scanning { ProgressView().controlSize(.small) }
-                }.padding(26)
+                }.padding(30)
                 if !store.message.isEmpty {
                     HStack { Text(store.message).font(.caption).foregroundStyle(.orange); if let path = store.lastRemovedPath { Button("Undo") { store.restoreProject(path) } }; Spacer(); Button { store.message = "" } label: { Image(systemName: "xmark") }.buttonStyle(.plain) }.padding(.horizontal, 26).padding(.bottom, 8)
                 }
                 if let project = selectedProject { ProjectSettings(store: store, project: project) }
                 else { general }
-            }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color(nsColor: .windowBackgroundColor))
-        }.frame(minWidth: 850, idealWidth: 920, minHeight: 610, idealHeight: 720)
+            }.frame(maxWidth: .infinity, maxHeight: .infinity).background(HopCanvas())
+        }.background(HopCanvas()).tint(.blue).frame(minWidth: 850, idealWidth: 920, minHeight: 610, idealHeight: 720)
             .sheet(item: $store.reviewProject, onDismiss: { store.offerNextReview() }) { project in
                 NewProjectReview(store: store, project: project)
             }
@@ -258,7 +361,7 @@ struct SettingsView: View {
                             else if store.prefs(p).pinned { Image(systemName: "pin.fill").font(.caption2) }
                         }.font(.system(size: 14, weight: .medium)).frame(maxWidth: .infinity, minHeight: 30, alignment: .leading).contentShape(Rectangle())
                     }.buttonStyle(.plain)
-                }.padding(.horizontal, 12).padding(.vertical, 10).background(store.settingsProject == p.id ? Color.teal.opacity(0.16) : Color.primary.opacity(0.02), in: RoundedRectangle(cornerRadius: 9))
+                }.padding(.horizontal, 12).padding(.vertical, 10).background(store.settingsProject == p.id ? Color.primary.opacity(0.09) : Color.primary.opacity(0.02), in: RoundedRectangle(cornerRadius: 9))
                     .modifier(ProjectDropTarget(store: store, project: p, scope: "settings"))
                     .contextMenu {
                         MoveToFolderMenu(store: store, project: p)
@@ -317,7 +420,7 @@ struct SettingsView: View {
             Section("Folders") {
                 ForEach(store.disk.folders) { folder in
                     HStack {
-                        Image(systemName: "folder.fill").foregroundStyle(.teal)
+                        Image(systemName: "folder.fill").foregroundStyle(.secondary)
                         TextField("Folder name", text: Binding(get: { store.disk.folders.first { $0.id == folder.id }?.title ?? "" }, set: { store.renameFolder(folder.id, to: $0) }))
                         Button("Remove") { store.removeFolder(folder.id) }
                     }
@@ -342,7 +445,7 @@ struct SettingsView: View {
             Section("App data") {
                 HStack { Text("Settings and logs are kept outside your projects.").foregroundStyle(.secondary); Spacer(); Button("Show in Finder") { NSWorkspace.shared.open(store.support) } }
             }
-        }.formStyle(.grouped)
+        }.formStyle(.grouped).scrollContentBackground(.hidden)
     }
 }
 @ViewBuilder var editorOptions: some View { Text("Visual Studio Code").tag("Visual Studio Code"); Text("Xcode").tag("Xcode"); Text("Cursor").tag("Cursor") }
@@ -355,7 +458,7 @@ struct ProjectSettings: View {
     }
     func serviceInput(_ title: String, text: Binding<String>, prompt: String = "") -> some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(title).font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
             TextField(title, text: text, prompt: Text(prompt)).labelsHidden().textFieldStyle(.roundedBorder).font(.system(size: 12, design: .monospaced))
         }
     }
@@ -402,7 +505,7 @@ struct ProjectSettings: View {
             Section("Where I left off") {
                 TextField("Note", text: field(\.note), axis: .vertical).lineLimit(3...6)
             }
-        }.formStyle(.grouped)
+        }.formStyle(.grouped).scrollContentBackground(.hidden)
     }
 }
 
@@ -475,7 +578,7 @@ struct NewProjectReview: View {
                         if !configureServer { draft.services = [] }
                         store.finishReview(project, preferences: draft)
                     } else { configuring = true }
-                }.buttonStyle(.borderedProminent).tint(.teal).keyboardShortcut(.defaultAction)
+                }.buttonStyle(.borderedProminent).tint(.blue).keyboardShortcut(.defaultAction)
             }.padding(20)
         }.frame(width: 610, height: configuring ? 640 : 280)
     }
@@ -497,8 +600,9 @@ struct NewProjectReview: View {
         status.button?.image = hopMark()
         status.button?.toolTip = "Hop"
         status.button?.target = self; status.button?.action = #selector(toggle)
+        popover.appearance = NSAppearance(named: .darkAqua)
         popover.contentSize = NSSize(width: 440, height: 680); popover.behavior = .transient; popover.delegate = self
-        popover.contentViewController = NSHostingController(rootView: RootView(store: store))
+        popover.contentViewController = NSHostingController(rootView: RootView(store: store).preferredColorScheme(.dark))
         if CommandLine.arguments.contains("--settings") { openSettings(nil) }
         else if CommandLine.arguments.contains("--show") { toggle() }
     }
@@ -522,8 +626,12 @@ struct NewProjectReview: View {
         popover.performClose(nil); store.settingsProject = project
         if settingsWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 920, height: 720), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+            window.appearance = NSAppearance(named: .darkAqua)
+            window.isOpaque = true
+            window.backgroundColor = .windowBackgroundColor
+            window.titlebarAppearsTransparent = false
             window.title = "Hop Settings"; window.minSize = NSSize(width: 850, height: 650)
-            window.contentViewController = NSHostingController(rootView: SettingsView(store: store))
+            window.contentViewController = NSHostingController(rootView: SettingsView(store: store).preferredColorScheme(.dark))
             window.isReleasedWhenClosed = false; window.delegate = self; window.center()
             settingsWindow = window
         }

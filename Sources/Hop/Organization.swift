@@ -147,7 +147,7 @@ struct ProjectDropTarget: ViewModifier {
         }.buttonStyle(.plain)
     }
     var insertion: some View {
-        HStack(spacing: 0) { Circle().fill(.teal).frame(width: 6, height: 6); Rectangle().fill(.teal).frame(height: 2) }.allowsHitTesting(false)
+        HStack(spacing: 0) { Circle().fill(.primary).frame(width: 6, height: 6); Rectangle().fill(.primary).frame(height: 2) }.allowsHitTesting(false)
     }
 }
 struct FolderHeader: View {
@@ -167,10 +167,10 @@ struct FolderHeader: View {
         Button { withAnimation { store.toggleFolder(groupID) } } label: {
             HStack(spacing: 9) {
                 Image(systemName: collapsed ? "chevron.right" : "chevron.down").font(.system(size: 10, weight: .semibold)).frame(width: 10)
-                Image(systemName: folder == nil ? "square.grid.2x2" : targeted ? "folder.badge.plus" : "folder.fill").foregroundStyle(folder == nil ? Color.secondary : Color.teal)
+                Image(systemName: folder == nil ? "square.grid.2x2" : targeted ? "folder.badge.plus" : "folder.fill").foregroundStyle(targeted ? Color.primary : Color.secondary)
                 Text(folder?.title ?? "Ungrouped").lineLimit(2)
                 Spacer(minLength: 0)
-                if targeted { Image(systemName: "arrow.down.to.line").foregroundStyle(.teal) }
+                if targeted { Image(systemName: "arrow.down.to.line").foregroundStyle(.primary) }
                 else { Text("\(count)").foregroundStyle(.secondary).font(.system(size: 11)) }
             }.font(.system(size: compact ? 14 : 13, weight: .medium))
                 .frame(maxWidth: .infinity, minHeight: compact ? 30 : 34, alignment: .leading)
@@ -178,8 +178,8 @@ struct FolderHeader: View {
                 .contentShape(Rectangle())
         }.buttonStyle(.plain)
             .opacity(store.draggingFolder == groupID ? 0.4 : 1)
-            .background(targeted ? Color.teal.opacity(0.16) : Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: compact ? 9 : 10))
-            .overlay { if targeted { RoundedRectangle(cornerRadius: 9).strokeBorder(.teal, style: StrokeStyle(lineWidth: 1.5, dash: [4, 3])).allowsHitTesting(false) } }
+            .background(targeted ? Color.primary.opacity(0.16) : Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: compact ? 9 : 10))
+            .overlay { if targeted { RoundedRectangle(cornerRadius: 9).strokeBorder(.primary, style: StrokeStyle(lineWidth: 1.5, dash: [4, 3])).allowsHitTesting(false) } }
             .contextMenu {
                 Button(collapsed ? "Expand" : "Collapse") { store.toggleFolder(groupID) }
                 if let folder {
@@ -195,7 +195,7 @@ struct FolderHeader: View {
                 .onEnded { value in store.updateOrganizerDrag(.folder(groupID), scope: scope, point: value.location); store.finishOrganizerDrag() })
     }
     var folderInsertion: some View {
-        HStack(spacing: 0) { Circle().fill(.teal).frame(width: 6, height: 6); Rectangle().fill(.teal).frame(height: 2) }.allowsHitTesting(false)
+        HStack(spacing: 0) { Circle().fill(.primary).frame(width: 6, height: 6); Rectangle().fill(.primary).frame(height: 2) }.allowsHitTesting(false)
     }
 
 }
@@ -255,7 +255,7 @@ struct OrganizationList<Content: View>: View {
                     if store.dragScope == scope, let title = store.dragTitle {
                         Text(title).font(.system(size: 14, weight: .semibold)).lineLimit(1)
                             .frame(width: 200, height: 44).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-                            .overlay { RoundedRectangle(cornerRadius: 10).stroke(.teal, lineWidth: 1.5) }
+                            .overlay { RoundedRectangle(cornerRadius: 10).stroke(.primary, lineWidth: 1.5) }
                             .shadow(color: .black.opacity(0.2), radius: 8, y: 4)
                             .position(x: min(max(105, store.dragPoint.x + 65), geometry.size.width - 105), y: max(24, store.dragPoint.y - 18))
                     }

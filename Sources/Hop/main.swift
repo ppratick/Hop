@@ -177,6 +177,9 @@ func scan(_ root: String, manualPaths: [String] = []) -> [Project] {
     @Published var message = ""
     @Published var phases: [String: String] = [:]
     @Published var external: Set<String> = []
+    @Published var commitProject: Project?
+    @Published var gitSync: [String: GitSyncState] = [:]
+    @Published var syncing: Set<String> = []
     @Published var expanded: String?
     @Published var settingsProject: String?
     @Published var lastRefreshed: Date?
@@ -363,6 +366,7 @@ func scan(_ root: String, manualPaths: [String] = []) -> [Project] {
             projects = found; scanning = false; lastRefreshed = Date(); save()
             if !FileManager.default.fileExists(atPath: root) { message = "Project folder isn’t available. Choose a folder from Settings." }
             offerNextReview()
+            for project in found { checkRemote(project) }
             await probeAll()
         }
     }
