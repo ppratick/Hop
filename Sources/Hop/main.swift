@@ -201,9 +201,10 @@ func scan(_ root: String, manualPaths: [String] = []) -> [Project] {
     @Published var draggingFolder: String?
     @Published var dragScope: String?
     @Published var dragPoint: CGPoint = .zero
+    var dragStartPoint: CGPoint = .zero
+    var dragInitialFrames: [String: OrganizerFrame] = [:]
     @Published var dragHover: OrganizerDrop?
     var dragFrames: [String: [String: OrganizerFrame]] = [:]
-    @Published var swipeProject: String?
     @Published var lastRemovedPath: String?
     var reviewRequested: ((Project) -> Void)?
     var promptedThisSession: Set<String> = []
@@ -313,7 +314,7 @@ func scan(_ root: String, manualPaths: [String] = []) -> [Project] {
         refresh(); return true
     }
     func removeManualProject(_ path: String) { disk.manualPaths.removeAll { $0 == path }; save(); refresh() }
-    func hideProject(_ project: Project) { update(project) { $0.hidden = true }; swipeProject = nil }
+    func hideProject(_ project: Project) { update(project) { $0.hidden = true } }
     @discardableResult func removeProject(_ project: Project) -> Bool {
         guard !services(project).contains(where: { isManaged(key(project, $0)) }) else {
             message = "Stop this project’s running services before removing it from Hop."; return false
@@ -322,7 +323,7 @@ func scan(_ root: String, manualPaths: [String] = []) -> [Project] {
         if settingsProject == project.id { settingsProject = nil }
         if reviewProject?.id == project.id { reviewProject = nil }
         if expanded == project.id { expanded = nil }
-        swipeProject = nil; lastRemovedPath = project.id
+        lastRemovedPath = project.id
         message = "Removed \(name(project)) from Hop."; save(); return true
     }
     func restoreProject(_ path: String) {

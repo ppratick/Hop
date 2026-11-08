@@ -30,135 +30,35 @@ import UniformTypeIdentifiers
         order.insert(path, at: index); disk.manualOrder = order; disk.order = .manual; disk.collapsedFolders.remove(folder ?? Store.ungroupedFolderID); save(); return true
     }
 }
-struct ProjectSwipeSurface: NSViewRepresentable {
-    @ObservedObject var store: Store
-    let project: Project
-    @Binding var swipeOffset: CGFloat
-    func makeNSView(context: Context) -> ProjectSwipeView { ProjectSwipeView() }
-    func updateNSView(_ view: ProjectSwipeView, context: Context) {
-        view.swipeOffset = swipeOffset
-        view.onSwipe = { offset, ended in
-            if !ended {
-                store.swipeProject = project.id
-                if offset < 0 && store.expanded == project.id { store.expanded = nil }
-                swipeOffset = offset
-            } else {
-                withAnimation(.snappy(duration: 0.2)) { swipeOffset = offset < -54 ? -144 : 0 }
-                if swipeOffset == 0 { store.swipeProject = nil }
-            }
-        }
-        view.toolTip = "Drag to organize. Swipe left to hide or remove."
-    }
-}
-final class ProjectSwipeView: NSView {
-    var onSwipe: ((CGFloat, Bool) -> Void)?
-    var swipeOffset: CGFloat = 0
-    private var scrollMonitor: Any?
-    private var swipeTracking = false
-    private var verticalScrolling = false
-    private var swipeStart: CGFloat = 0
-    private var swipeDistance: CGFloat = 0
-    private var swipeEnd: DispatchWorkItem?
-    private weak var gestureHost: NSView?
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        if gestureHost !== window?.contentView {
-            gestureHost = window?.contentView
-        }
-        if let scrollMonitor { NSEvent.removeMonitor(scrollMonitor) }; scrollMonitor = nil
-        if window != nil {
-            scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
-                guard let self else { return event }; return self.handleSwipe(event)
-            }
-        }
-    }
-    deinit { if let scrollMonitor { NSEvent.removeMonitor(scrollMonitor) } }
-    private func finishSwipe() {
-        guard swipeTracking else { return }
-        swipeTracking = false; verticalScrolling = false
-        onSwipe?(max(-144, min(0, swipeStart + swipeDistance)), true)
-    }
-    private func handleSwipe(_ event: NSEvent) -> NSEvent? {
-        guard onSwipe != nil, event.window === window, event.momentumPhase.isEmpty else { return event }
-        let ended = event.phase.contains(.ended) || event.phase.contains(.cancelled)
-        if ended {
-            if swipeTracking { swipeEnd?.cancel(); finishSwipe(); return nil }
-            verticalScrolling = false; return event
-        }
-        if event.phase.contains(.began) { verticalScrolling = false }
-        if !swipeTracking {
-            guard !isHiddenOrHasHiddenAncestor, visibleRect.contains(convert(event.locationInWindow, from: nil)) else { return event }
-            if abs(event.scrollingDeltaY) > abs(event.scrollingDeltaX) * 1.2 { verticalScrolling = true }
-            guard !verticalScrolling, abs(event.scrollingDeltaX) > max(1, abs(event.scrollingDeltaY) * 1.2) else { return event }
-            var hit = gestureHost?.hitTest(gestureHost?.convert(event.locationInWindow, from: nil) ?? .zero)
-            while let view = hit, view !== gestureHost {
-                if view is NSTextView || view is NSTextField { return event }
-                hit = view.superview
-            }
-            swipeTracking = true; swipeStart = swipeOffset; swipeDistance = 0
-        }
-        swipeDistance += event.scrollingDeltaX
-        onSwipe?(max(-144, min(0, swipeStart + swipeDistance)), false)
-        swipeEnd?.cancel()
-        if event.phase.isEmpty {
-            let end = DispatchWorkItem { [weak self] in self?.finishSwipe() }; swipeEnd = end
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: end)
-        }
-        return nil
-    }
-}
 struct ProjectDropTarget: ViewModifier {
     @ObservedObject var store: Store
     let project: Project
     var scope = "menu"
     var allowsDragging = true
-    var edge: Int? {
-        guard case let .project(id, after) = store.dragHover, id == project.id else { return nil }
-        return after ? 1 : 0
-    }
-    @State private var swipeOffset: CGFloat = 0
+    var lifted: Bool { store.draggingProject == project.id && store.dragScope == scope }
     func body(content: Content) -> some View {
-        ZStack(alignment: .trailing) {
-            if swipeOffset < 0 {
-                HStack(spacing: 0) {
-                    swipeButton("Hide", icon: "eye.slash", color: .orange) { store.hideProject(project); swipeOffset = 0 }
-                    swipeButton("Remove", icon: "trash", color: .red) { store.removeProject(project); swipeOffset = 0 }
-                }.frame(width: 144).frame(maxHeight: .infinity)
-            }
-            content
-                .background(ProjectSwipeSurface(store: store, project: project, swipeOffset: $swipeOffset))
-                .offset(x: swipeOffset)
-                .simultaneousGesture(TapGesture().onEnded { if swipeOffset != 0 { withAnimation(.snappy(duration: 0.2)) { swipeOffset = 0 } } })
-        }.clipShape(RoundedRectangle(cornerRadius: 9))
-            .opacity(store.draggingProject == project.id ? 0.4 : 1)
-            .overlay(alignment: .top) { if edge == 0 { insertion.offset(y: -4) } }
-            .overlay(alignment: .bottom) { if edge == 1 { insertion.offset(y: 4) } }
+        content
             .modifier(OrganizerGeometry(item: .project(project.id), scope: scope))
+            .scaleEffect(lifted ? 1.025 : 1)
+            .shadow(color: .black.opacity(lifted ? 0.3 : 0), radius: 14, y: 6)
+            .offset(store.projectDragOffset(project, scope: scope))
+            .zIndex(lifted ? 10 : 0)
+            .animation(lifted ? nil : .spring(response: 0.25, dampingFraction: 0.85), value: store.dragHover)
             .highPriorityGesture(DragGesture(minimumDistance: 6, coordinateSpace: .named(scope))
-                .onChanged { value in swipeOffset = 0; store.updateOrganizerDrag(.project(project.id), scope: scope, point: value.location) }
+                .onChanged { value in store.updateOrganizerDrag(.project(project.id), scope: scope, point: value.location) }
                 .onEnded { value in store.updateOrganizerDrag(.project(project.id), scope: scope, point: value.location); store.finishOrganizerDrag() }, including: allowsDragging ? .all : .none)
-            .onChange(of: store.swipeProject) { _, value in if value != project.id { withAnimation(.snappy(duration: 0.2)) { swipeOffset = 0 } } }
-    }
-    func swipeButton(_ title: String, icon: String, color: Color, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 5) { Image(systemName: icon).font(.system(size: 15)); Text(title).font(.system(size: 10, weight: .semibold)) }
-                .foregroundStyle(.white).frame(width: 72).frame(maxHeight: .infinity).background(color).contentShape(Rectangle())
-        }.buttonStyle(.plain)
-    }
-    var insertion: some View {
-        HStack(spacing: 0) { Circle().fill(.primary).frame(width: 6, height: 6); Rectangle().fill(.primary).frame(height: 2) }.allowsHitTesting(false)
     }
 }
+
 struct FolderHeader: View {
     @ObservedObject var store: Store
     let folder: ProjectFolder?
     let count: Int
     var compact = false
-    var targeted: Bool { store.dragHover == .insideFolder(groupID) }
-    var folderEdge: Int? {
-        guard case let .folder(id, after) = store.dragHover, id == groupID else { return nil }
-        return after ? 1 : 0
+    var targeted: Bool {
+        if store.dragHover == .insideFolder(groupID) { return true }
+        if case let .folder(id, _) = store.dragHover { return id == groupID }
+        return false
     }
     var scope: String { compact ? "settings" : "menu" }
     var groupID: String { folder?.id ?? Store.ungroupedFolderID }
@@ -167,19 +67,24 @@ struct FolderHeader: View {
         Button { withAnimation { store.toggleFolder(groupID) } } label: {
             HStack(spacing: 9) {
                 Image(systemName: collapsed ? "chevron.right" : "chevron.down").font(.system(size: 10, weight: .semibold)).frame(width: 10)
-                Image(systemName: folder == nil ? "square.grid.2x2" : targeted ? "folder.badge.plus" : "folder.fill").foregroundStyle(targeted ? Color.primary : Color.secondary)
+                Image(systemName: folder == nil ? "square.grid.2x2" : targeted ? "folder.badge.plus" : "folder.fill").foregroundStyle(targeted ? Color.blue : (compact ? Color.blue.opacity(0.8) : Color.secondary))
                 Text(folder?.title ?? "Ungrouped").lineLimit(2)
                 Spacer(minLength: 0)
                 if targeted { Image(systemName: "arrow.down.to.line").foregroundStyle(.primary) }
-                else { Text("\(count)").foregroundStyle(.secondary).font(.system(size: 11)) }
-            }.font(.system(size: compact ? 14 : 13, weight: .medium))
-                .frame(maxWidth: .infinity, minHeight: compact ? 30 : 34, alignment: .leading)
-                .padding(.horizontal, 12).padding(.vertical, compact ? 10 : 12)
+                else {
+                    Text("\(count)").font(.system(size: 10, weight: .medium, design: .rounded))
+                        .monospacedDigit().foregroundStyle(.secondary)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(.white.opacity(0.055), in: Capsule())
+                }
+            }.font(.system(size: compact ? 12 : 13, weight: .medium))
+                .frame(maxWidth: .infinity, minHeight: compact ? 22 : 34, alignment: .leading)
+                .padding(.horizontal, 12).padding(.vertical, compact ? 7 : 12)
                 .contentShape(Rectangle())
         }.buttonStyle(.plain)
             .opacity(store.draggingFolder == groupID ? 0.4 : 1)
-            .background(targeted ? Color.primary.opacity(0.16) : Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: compact ? 9 : 10))
-            .overlay { if targeted { RoundedRectangle(cornerRadius: 9).strokeBorder(.primary, style: StrokeStyle(lineWidth: 1.5, dash: [4, 3])).allowsHitTesting(false) } }
+            .background(targeted ? Color.blue.opacity(0.22) : Color.blue.opacity(compact ? 0.07 : 0.085), in: RoundedRectangle(cornerRadius: compact ? 9 : 10))
+            .overlay { if targeted { RoundedRectangle(cornerRadius: 9).strokeBorder(.blue.opacity(0.5), lineWidth: 1).allowsHitTesting(false) } }
             .contextMenu {
                 Button(collapsed ? "Expand" : "Collapse") { store.toggleFolder(groupID) }
                 if let folder {
@@ -187,15 +92,11 @@ struct FolderHeader: View {
                     Button("Remove folder") { store.removeFolder(folder.id) }
                 }
             }
-            .overlay(alignment: .top) { if folderEdge == 0 { folderInsertion.offset(y: -4) } }
-            .overlay(alignment: .bottom) { if folderEdge == 1 { folderInsertion.offset(y: 4) } }
+
             .modifier(OrganizerGeometry(item: .folder(groupID), scope: scope))
             .highPriorityGesture(DragGesture(minimumDistance: 6, coordinateSpace: .named(scope))
                 .onChanged { value in store.updateOrganizerDrag(.folder(groupID), scope: scope, point: value.location) }
                 .onEnded { value in store.updateOrganizerDrag(.folder(groupID), scope: scope, point: value.location); store.finishOrganizerDrag() })
-    }
-    var folderInsertion: some View {
-        HStack(spacing: 0) { Circle().fill(.primary).frame(width: 6, height: 6); Rectangle().fill(.primary).frame(height: 2) }.allowsHitTesting(false)
     }
 
 }
@@ -252,7 +153,7 @@ struct OrganizationList<Content: View>: View {
             .onPreferenceChange(OrganizerFramesKey.self) { frames in store.dragFrames[scope] = frames }
             .overlay {
                 GeometryReader { geometry in
-                    if store.dragScope == scope, let title = store.dragTitle {
+                    if store.dragScope == scope, store.draggingFolder != nil, let title = store.dragTitle {
                         Text(title).font(.system(size: 14, weight: .semibold)).lineLimit(1)
                             .frame(width: 200, height: 44).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
                             .overlay { RoundedRectangle(cornerRadius: 10).stroke(.primary, lineWidth: 1.5) }
@@ -274,13 +175,46 @@ struct OrganizationList<Content: View>: View {
         if let id = draggingFolder { return disk.folders.first(where: { $0.id == id })?.title ?? "Ungrouped" }
         return nil
     }
+    func projectDragOffset(_ project: Project, scope: String) -> CGSize {
+        guard dragScope == scope, let sourceID = draggingProject,
+              let source = projects.first(where: { $0.id == sourceID }),
+              !dragInitialFrames.isEmpty,
+              let sourceFrame = dragInitialFrames[OrganizerItem.project(sourceID).key]?.rect else { return .zero }
+        if project.id == sourceID {
+            return CGSize(width: max(-12, min(12, dragPoint.x - dragStartPoint.x)),
+                          height: dragPoint.y - dragStartPoint.y)
+        }
+        guard case let .project(targetID, after) = dragHover,
+              let target = projects.first(where: { $0.id == targetID }),
+              folderID(source) == folderID(target),
+              folderID(project) == folderID(source),
+              let targetFrame = dragInitialFrames[OrganizerItem.project(targetID).key]?.rect,
+              let row = dragInitialFrames[OrganizerItem.project(project.id).key]?.rect else { return .zero }
+        let distance = sourceFrame.height + (scope == "settings" ? 5 : 8)
+        if targetFrame.midY > sourceFrame.midY,
+           row.midY > sourceFrame.midY,
+           (row.midY < targetFrame.midY || (project.id == targetID && after)) {
+            return CGSize(width: 0, height: -distance)
+        }
+        if targetFrame.midY < sourceFrame.midY,
+           row.midY < sourceFrame.midY,
+           (row.midY > targetFrame.midY || (project.id == targetID && !after)) {
+            return CGSize(width: 0, height: distance)
+        }
+        return .zero
+    }
     func updateOrganizerDrag(_ item: OrganizerItem, scope: String, point: CGPoint) {
+        if organizerItem != item || dragScope != scope {
+            dragStartPoint = point
+            dragInitialFrames = dragFrames[scope] ?? [:]
+        }
+
         switch item {
         case .project(let id): draggingProject = id; draggingFolder = nil
         case .folder(let id): draggingFolder = id; draggingProject = nil
         }
-        swipeProject = nil; dragScope = scope; dragPoint = point
-        let target = dragFrames[scope]?.values.filter { $0.item != item && $0.rect.contains(point) }.min { $0.rect.height < $1.rect.height }
+        dragScope = scope; dragPoint = point
+        let target = dragInitialFrames.values.filter { $0.item != item && $0.rect.contains(point) }.min { $0.rect.height < $1.rect.height }
         guard let target else { dragHover = nil; return }
         switch (item, target.item) {
         case (.project, .project(let id)): dragHover = .project(id, after: point.y >= target.rect.midY)
@@ -297,7 +231,7 @@ struct OrganizationList<Content: View>: View {
             case let .insideFolder(id): if let source = draggingProject { _ = dropIntoFolder(source, folder: id == Self.ungroupedFolderID ? nil : id) }
             case nil: break
             }
-            draggingProject = nil; draggingFolder = nil; dragScope = nil; dragHover = nil
+            draggingProject = nil; draggingFolder = nil; dragScope = nil; dragHover = nil; dragInitialFrames = [:]
         }
     }
 }

@@ -72,13 +72,16 @@
         let sourceID = project.id, targetID = found.last!.id
         let dragFolderA = gestureStore.createFolder("Drag A")!, dragFolderB = gestureStore.createFolder("Drag B")!
         gestureStore.dragFrames["settings"] = [
-            "source": OrganizerFrame(item: .project(sourceID), rect: CGRect(x: 0, y: 0, width: 200, height: 50)),
-            "target": OrganizerFrame(item: .project(targetID), rect: CGRect(x: 0, y: 60, width: 200, height: 50)),
+            OrganizerItem.project(sourceID).key: OrganizerFrame(item: .project(sourceID), rect: CGRect(x: 0, y: 0, width: 200, height: 50)),
+            OrganizerItem.project(targetID).key: OrganizerFrame(item: .project(targetID), rect: CGRect(x: 0, y: 60, width: 200, height: 50)),
             "folderA": OrganizerFrame(item: .folder(dragFolderA), rect: CGRect(x: 0, y: 120, width: 200, height: 50)),
             "folderB": OrganizerFrame(item: .folder(dragFolderB), rect: CGRect(x: 0, y: 180, width: 200, height: 50))]
         gestureStore.dragFrames["menu"] = ["other": OrganizerFrame(item: .folder(dragFolderB), rect: CGRect(x: 0, y: 60, width: 200, height: 50))]
         gestureStore.updateOrganizerDrag(.project(sourceID), scope: "settings", point: CGPoint(x: 20, y: 95))
         check(gestureStore.dragHover == .project(targetID, after: true), "Route a real drag location to the lower project insertion edge")
+        check(gestureStore.projectDragOffset(found.last!, scope: "settings").height < 0, "Hover preview shifts the target card into the source slot")
+        check(gestureStore.projectDragOffset(found.last!, scope: "menu") == .zero, "Drag previews stay within their own list")
+        check(gestureStore.disk.order != .manual, "Hover preview does not persist a reorder before drop")
         gestureStore.finishOrganizerDrag()
         check(gestureStore.orderedProjects(includeHidden: true).last?.id == sourceID, "Commit the gesture's project reorder")
         check(gestureStore.dragScope == nil && gestureStore.dragHover == nil && gestureStore.draggingProject == nil, "Clear drag state after dropping")
@@ -93,6 +96,7 @@
         check(gestureStore.dragHover == .folder(dragFolderA, after: false), "Recognize folder insertion from the pointer location")
         gestureStore.finishOrganizerDrag()
         check(gestureStore.orderedGroupIDs.first == dragFolderB, "Commit the gesture's folder reorder")
+        check(gestureStore.projectDragOffset(found.last!, scope: "settings") == .zero, "Drop clears live card offsets")
         let beforeInvalidDrop = gestureStore.disk.groupOrder
         gestureStore.updateOrganizerDrag(.folder(dragFolderB), scope: "settings", point: CGPoint(x: 500, y: 500))
         gestureStore.finishOrganizerDrag()

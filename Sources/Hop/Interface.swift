@@ -3,12 +3,42 @@ import SwiftUI
 import UniformTypeIdentifiers
 import ServiceManagement
 
+struct GeneralSettingsCard<Content: View>: View {
+    let title: String
+    let subtitle: String
+    let icon: String
+    @ViewBuilder var content: Content
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: icon)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.blue)
+                    .frame(width: 28, height: 28)
+                    .background(.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title).font(.system(size: 14, weight: .semibold))
+                    Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            Divider().opacity(0.6)
+            VStack(alignment: .leading, spacing: 10) { content }
+                .font(.system(size: 12))
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(12)
+        .background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.white.opacity(0.07)))
+    }
+}
+
 struct LoginItemSetting: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var status = SMAppService.mainApp.status
     @State private var error = ""
     var body: some View {
-        Section("Startup") {
+        GeneralSettingsCard(title: "Startup", subtitle: "Keep Hop ready when you need it.", icon: "power") {
             Toggle("Open Hop at login", isOn: Binding(
                 get: { status == .enabled || status == .requiresApproval },
                 set: { enabled in
@@ -214,17 +244,14 @@ struct RootView: View {
                 Text("PROJECTS").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
                 Spacer()
                 Menu {
-                    Picker("Sort by", selection: Binding(get: { store.disk.order }, set: { value in
-                        store.changeSettings { $0.order = value }
-                    })) {
-                        ForEach(ProjectOrder.allCases) { order in
-                            Text(order.title).tag(order)
+                    ForEach(ProjectOrder.allCases) { order in
+                        Button {
+                            store.changeSettings { $0.order = order }
+                        } label: {
+                            if store.disk.order == order { Label(order.title, systemImage: "checkmark") }
+                            else { Text(order.title) }
                         }
                     }
-                    Divider()
-                    Toggle("Pinned projects first", isOn: Binding(get: { store.disk.pinnedFirst }, set: { value in
-                        store.changeSettings { $0.pinnedFirst = value }
-                    }))
                 } label: {
                     Label(store.disk.order.title, systemImage: "arrow.up.arrow.down")
                         .font(.system(size: 11, weight: .medium))
@@ -378,37 +405,111 @@ struct RootView: View {
     }
 }
 
+private struct SidebarProjectStyle: ViewModifier {
+    let selected: Bool
+    @State private var hovered = false
+    func body(content: Content) -> some View {
+        content
+            .background(
+                LinearGradient(colors: selected
+                    ? [Color.blue.opacity(0.38), Color.blue.opacity(0.20)]
+                    : [Color.blue.opacity(hovered ? 0.16 : 0.055), Color.white.opacity(hovered ? 0.045 : 0.015)],
+                    startPoint: .topLeading, endPoint: .bottomTrailing),
+                in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(selected ? Color.blue.opacity(0.55) : Color.white.opacity(hovered ? 0.12 : 0.035)))
+            .shadow(color: .black.opacity(selected ? 0.12 : 0), radius: 5, y: 2)
+            .overlay(alignment: .leading) {
+                if selected {
+                    Capsule().fill(Color(red: 0.45, green: 0.75, blue: 1)).frame(width: 3, height: 16).padding(.leading, 1)
+                }
+            }
+            .onHover { hovered = $0 }
+            .animation(.easeOut(duration: 0.12), value: hovered)
+            .animation(.easeOut(duration: 0.12), value: selected)
+    }
+}
+
 struct SettingsView: View {
     @ObservedObject var store: Store
     @State private var filter = ""
+    @FocusState private var searchFocused: Bool
     var selectedProject: Project? { store.projects.first { $0.id == store.settingsProject } }
     func setting<T>(_ path: WritableKeyPath<DiskState,T>) -> Binding<T> { Binding(get: { store.disk[keyPath: path] }, set: { value in store.changeSettings { $0[keyPath: path] = value } }) }
     var body: some View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 10) { BrandMark(size: 28); VStack(alignment: .leading) { Text("Hop").font(.system(size: 24, weight: .bold, design: .rounded)); Text("Settings").font(.caption).foregroundStyle(.secondary) } }.padding(20)
+                HStack(spacing: 11) {
+                    BrandMark(size: 23)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Hop").font(.system(size: 22, weight: .bold, design: .rounded))
+                        Text("Your project workspace").font(.system(size: 10)).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }.padding(.horizontal, 18).padding(.top, 20).padding(.bottom, 18)
                 Button { store.settingsProject = nil } label: {
-                    Label("General", systemImage: "slider.horizontal.3").frame(maxWidth: .infinity, alignment: .leading).padding(10).background(store.settingsProject == nil ? Color.primary.opacity(0.09) : .clear, in: RoundedRectangle(cornerRadius: 7))
-                }.buttonStyle(.plain).padding(.horizontal, 10)
-                HStack { Text("PROJECTS").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary); Spacer(); AddProjectMenu(store: store) }.padding(.horizontal, 20).padding(.top, 24).padding(.bottom, 10)
+                    HStack(spacing: 10) {
+                        Image(systemName: "slider.horizontal.3").foregroundStyle(.blue).frame(width: 20)
+                        Text("General").font(.system(size: 12, weight: .semibold))
+                        Spacer()
+                    }.padding(.horizontal, 12).padding(.vertical, 11)
+                        .background(Color.blue.opacity(store.settingsProject == nil ? 0.13 : 0.025), in: RoundedRectangle(cornerRadius: 10))
+                        .contentShape(RoundedRectangle(cornerRadius: 10))
+                }.buttonStyle(.plain).padding(.horizontal, 12)
+                Divider().opacity(0.5).padding(.horizontal, 18).padding(.top, 18)
+                HStack(spacing: 8) {
+                    Text("PROJECTS").font(.system(size: 10, weight: .semibold)).tracking(0.8).foregroundStyle(.secondary)
+                    Spacer()
+                    Menu {
+                        ForEach(ProjectOrder.allCases) { order in
+                            Button {
+                                store.changeSettings { $0.order = order }
+                            } label: {
+                                if store.disk.order == order { Label(order.title, systemImage: "checkmark") }
+                                else { Text(order.title) }
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "arrow.up.arrow.down").font(.system(size: 11, weight: .semibold)).frame(width: 25, height: 25).background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 7))
+                    }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                    .help("Sort projects · " + store.disk.order.title).accessibilityLabel("Sort projects")
+                    AddProjectMenu(store: store).padding(4).background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 7))
+                }.padding(.horizontal, 18).padding(.top, 14).padding(.bottom, 9)
                 HStack(spacing: 7) {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField("Search projects", text: $filter).textFieldStyle(.plain)
-                }.padding(9).background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 9)).padding(.horizontal, 12).padding(.bottom, 12)
+                    TextField("Search projects", text: $filter).textFieldStyle(.plain).font(.system(size: 12)).focused($searchFocused)
+                    if !filter.isEmpty {
+                        Button { filter = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                            .buttonStyle(.plain).accessibilityLabel("Clear search")
+                    }
+                }.padding(10)
+                    .background(.black.opacity(0.14), in: RoundedRectangle(cornerRadius: 10))
+                    .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(searchFocused ? Color.blue.opacity(0.5) : Color.white.opacity(0.08)))
+                    .padding(.horizontal, 12).padding(.bottom, 14)
                 OrganizationList(store: store, scope: "settings") {
                     LazyVStack(spacing: 3) {
                         ForEach(store.orderedGroupIDs, id: \.self) { groupID in
                             let folder = store.disk.folders.first { $0.id == groupID }
                             let members = sidebarProjects.filter { store.folderID($0) == folder?.id }
                             if filter.isEmpty || !members.isEmpty {
-                                FolderHeader(store: store, folder: folder, count: members.count, compact: true)
-                                if !store.disk.collapsedFolders.contains(groupID) || !filter.isEmpty { sidebarRows(members).padding(.leading, 14) }
+                                VStack(spacing: 6) {
+                                    FolderHeader(store: store, folder: folder, count: members.count, compact: true)
+                                    if !store.disk.collapsedFolders.contains(groupID) || !filter.isEmpty {
+                                        sidebarRows(members).padding(.leading, 10)
+                                    }
+                                }.padding(.bottom, 12)
                             }
                         }
-                    }.padding(.horizontal, 10)
+                        if sidebarProjects.isEmpty {
+                            Text("No matching projects").font(.system(size: 12)).foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity).padding(.vertical, 24)
+                        }
+                    }.padding(.horizontal, 12).padding(.bottom, 16)
                 }
-                Label("Changes saved automatically", systemImage: "checkmark.circle").font(.system(size: 11)).foregroundStyle(.tertiary).padding(16)
-            }.frame(width: 230).background(.ultraThinMaterial)
+            }.frame(width: 260).background {
+                Rectangle().fill(.ultraThinMaterial)
+                    .overlay(LinearGradient(colors: [Color.blue.opacity(0.055), .clear, .black.opacity(0.08)], startPoint: .topLeading, endPoint: .bottomTrailing))
+            }
             Divider()
             VStack(alignment: .leading, spacing: 0) {
                 HStack {
@@ -440,18 +541,20 @@ struct SettingsView: View {
         }
     }
     func sidebarRows(_ projects: [Project]) -> some View {
-        VStack(spacing: 7) {
+        VStack(spacing: 5) {
             ForEach(projects) { p in
                 HStack(spacing: 6) {
                     Button { store.settingsProject = p.id } label: {
                         HStack {
-                            Text(store.name(p)).lineLimit(2); Spacer(minLength: 0)
+                            Text(store.name(p)).lineLimit(2).foregroundStyle(store.settingsProject == p.id ? Color.white : Color.primary.opacity(0.88))
+                            Spacer(minLength: 0)
                             if store.prefs(p).admission == .pending { Text("NEW").font(.system(size: 8, weight: .bold)).foregroundStyle(.orange) }
                             else if !store.isInMenu(p) { Image(systemName: "eye.slash").font(.caption2) }
                             else if store.prefs(p).pinned { Image(systemName: "pin.fill").font(.caption2) }
-                        }.font(.system(size: 14, weight: .medium)).frame(maxWidth: .infinity, minHeight: 30, alignment: .leading).contentShape(Rectangle())
+                        }.font(.system(size: 12, weight: .medium)).frame(maxWidth: .infinity, minHeight: 24, alignment: .leading).contentShape(Rectangle())
                     }.buttonStyle(.plain)
-                }.padding(.horizontal, 12).padding(.vertical, 10).background(store.settingsProject == p.id ? Color.primary.opacity(0.09) : Color.primary.opacity(0.02), in: RoundedRectangle(cornerRadius: 9))
+                }.padding(.horizontal, 12).padding(.vertical, 8)
+                    .modifier(SidebarProjectStyle(selected: store.settingsProject == p.id))
                     .modifier(ProjectDropTarget(store: store, project: p, scope: "settings"))
                     .contextMenu {
                         MoveToFolderMenu(store: store, project: p)
@@ -464,79 +567,93 @@ struct SettingsView: View {
         }
     }
     var general: some View {
-        Form {
-            LoginItemSetting()
-            if !store.pendingProjects.isEmpty {
-                Section("New projects to review") {
-                    ForEach(store.pendingProjects) { project in
-                        HStack { Text(store.name(project)); Spacer(); Button("Review…") { store.beginReview(project) } }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                LoginItemSetting()
+                if !store.pendingProjects.isEmpty {
+                    GeneralSettingsCard(title: "Ready to review", subtitle: "Choose which new projects appear in your menu.", icon: "tray") {
+                        ForEach(store.pendingProjects) { project in
+                            HStack { Text(store.name(project)); Spacer(); Button("Review…") { store.beginReview(project) } }
+                        }
+                        Text("New projects stay in Settings until you choose to add them to the menu bar.").font(.caption).foregroundStyle(.secondary)
                     }
-                    Text("New projects stay in Settings until you choose to add them to the menu bar.").font(.caption).foregroundStyle(.secondary)
                 }
-            }
-            Section("Projects") {
-                LabeledContent("Auto-discovery source folder") {
-                    VStack(alignment: .trailing, spacing: 8) {
-                        Text(store.disk.root.replacingOccurrences(of: NSHomeDirectory(), with: "~")).font(.caption).lineLimit(3).textSelection(.enabled)
+                GeneralSettingsCard(title: "Project library", subtitle: "Choose where Hop finds your projects.", icon: "folder.badge.plus") {
+                    HStack {
+                        Text("Discovery folder").fontWeight(.medium)
+                        Spacer()
                         Button("Choose folder…") {
                             let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false
                             if panel.runModal() == .OK, let url = panel.url { store.changeSettings { $0.root = url.path }; store.refresh() }
                         }
                     }
-                }
-                Picker("Automatic refresh", selection: setting(\.refreshSeconds)) {
-                    Text("Off").tag(0); Text("Every 15 seconds").tag(15); Text("Every 30 seconds").tag(30); Text("Every minute").tag(60); Text("Every 5 minutes").tag(300)
-                }
-                Toggle("Refresh when opening the menu", isOn: setting(\.refreshOnOpen))
-                HStack { if let date = store.lastRefreshed { Text("Updated \(date.formatted(date: .omitted, time: .shortened))").foregroundStyle(.secondary) }; Spacer(); Button("Refresh now") { store.refresh() }.disabled(store.scanning) }
-                ForEach(store.disk.manualPaths, id: \.self) { path in
-                    HStack {
-                        Text(path.replacingOccurrences(of: NSHomeDirectory(), with: "~")).font(.caption).lineLimit(2).textSelection(.enabled)
-                        Spacer()
-                        Button("Stop tracking") { store.removeManualProject(path) }.help("Remove this added location from Hop. Project files stay untouched.")
+                    Label(store.disk.root.replacingOccurrences(of: NSHomeDirectory(), with: "~"), systemImage: "folder")
+                        .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                        .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                        .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.black.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+                    ForEach(store.disk.manualPaths, id: \.self) { path in
+                        HStack {
+                            Text(path.replacingOccurrences(of: NSHomeDirectory(), with: "~")).font(.caption).lineLimit(2).textSelection(.enabled)
+                            Spacer()
+                            Button("Stop tracking") { store.removeManualProject(path) }.help("Remove this added location from Hop. Project files stay untouched.")
+                        }
                     }
-                }
-                Button("Add project from anywhere…", systemImage: "folder.badge.plus") { store.chooseProjects() }
-                if !store.disk.removedProjects.isEmpty {
-                    DisclosureGroup("Removed projects") {
-                        ForEach(store.disk.removedProjects.sorted(), id: \.self) { path in
-                            HStack {
-                                Text(store.disk.projects[path]?.title.isEmpty == false ? store.disk.projects[path]!.title : URL(fileURLWithPath: path).lastPathComponent)
-                                Spacer(); Button("Restore") { store.restoreProject(path) }
+                    Button("Add project from anywhere…", systemImage: "folder.badge.plus") { store.chooseProjects() }
+                    if !store.disk.removedProjects.isEmpty {
+                        DisclosureGroup("Removed projects") {
+                            ForEach(store.disk.removedProjects.sorted(), id: \.self) { path in
+                                HStack {
+                                    Text(store.disk.projects[path]?.title.isEmpty == false ? store.disk.projects[path]!.title : URL(fileURLWithPath: path).lastPathComponent)
+                                    Spacer(); Button("Restore") { store.restoreProject(path) }
+                                }
                             }
                         }
                     }
                 }
-            }
-            Section("Folders") {
-                ForEach(store.disk.folders) { folder in
-                    HStack {
-                        Image(systemName: "folder.fill").foregroundStyle(.secondary)
-                        TextField("Folder name", text: Binding(get: { store.disk.folders.first { $0.id == folder.id }?.title ?? "" }, set: { store.renameFolder(folder.id, to: $0) }))
-                        Button("Remove") { store.removeFolder(folder.id) }
+                GeneralSettingsCard(title: "Refresh & sync", subtitle: "Control how often project and Git status update.", icon: "arrow.triangle.2.circlepath") {
+                    Picker("Automatic refresh", selection: setting(\.refreshSeconds)) {
+                        Text("Off").tag(0); Text("Every 15 seconds").tag(15); Text("Every 30 seconds").tag(30); Text("Every minute").tag(60); Text("Every 5 minutes").tag(300)
                     }
+                    Toggle("Refresh when opening the menu", isOn: setting(\.refreshOnOpen))
+                    HStack { if let date = store.lastRefreshed { Text("Updated \(date.formatted(date: .omitted, time: .shortened))").foregroundStyle(.secondary) }; Spacer(); Button("Refresh now") { store.refresh() }.disabled(store.scanning) }
                 }
-                Button("New folder…", systemImage: "plus") { store.askForFolder() }
-                Text("Folders organize Hop. Your project files stay in their original locations.").font(.caption).foregroundStyle(.secondary)
-            }
-            Section("Project order") {
-                Picker("Sort by", selection: setting(\.order)) { ForEach(ProjectOrder.allCases) { Text($0.title).tag($0) } }
-                Toggle("Keep pinned projects at the top", isOn: setting(\.pinnedFirst))
-                Text("Press and drag a project card to lift it. Drop at an insertion line to reorder, or onto a folder to organize it. Reordering switches to manual order.").font(.caption).foregroundStyle(.secondary)
-            }
-            Section("Launch preferences") {
-                Picker("Run service commands in", selection: setting(\.commandMode)) {
-                    Text("Background").tag(CommandMode.background)
-                    Text("Terminal").tag(CommandMode.terminal)
+                GeneralSettingsCard(title: "Folders", subtitle: "Organize your menu without moving project files.", icon: "folder") {
+                    ForEach(store.disk.folders) { folder in
+                        HStack {
+                            Image(systemName: "folder.fill").foregroundStyle(.secondary)
+                            TextField("Folder name", text: Binding(get: { store.disk.folders.first { $0.id == folder.id }?.title ?? "" }, set: { store.renameFolder(folder.id, to: $0) }))
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 12, weight: .medium))
+                                .padding(.horizontal, 10).padding(.vertical, 8)
+                                .background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 8))
+                                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.09)))
+                                .help("Rename folder")
+
+                            Button("Remove") { store.removeFolder(folder.id) }
+                        }
+                    }
+                    Button("New folder…", systemImage: "plus") { store.askForFolder() }
+
                 }
-                Text("Background keeps output in logs. Terminal runs each service in its own shell, showing the command and live output. Applies the next time a service starts.").font(.caption).foregroundStyle(.secondary)
-                Picker("Default editor for new projects", selection: setting(\.defaultEditor)) { editorOptions }
-                Text("Actions start unchecked for new projects. Your selections are remembered separately for each project.").font(.caption).foregroundStyle(.secondary)
+                GeneralSettingsCard(title: "Launch defaults", subtitle: "Set how new projects open.", icon: "arrow.up.forward.app") {
+                    Picker("Run services in", selection: setting(\.commandMode)) {
+                        Text("Background").tag(CommandMode.background)
+                        Text("Terminal").tag(CommandMode.terminal)
+                    }
+                    Text("Background keeps output in logs. Terminal runs each service in its own shell, showing the command and live output. Applies the next time a service starts.").font(.caption).foregroundStyle(.secondary)
+                    Picker("Default editor", selection: setting(\.defaultEditor)) { editorOptions }
+                    Text("Actions start unchecked for new projects. Your selections are remembered separately for each project.").font(.caption).foregroundStyle(.secondary)
+                }
+                GeneralSettingsCard(title: "Storage", subtitle: "Settings and service logs.", icon: "externaldrive") {
+                    HStack { Text("Settings and logs are kept outside your projects.").foregroundStyle(.secondary); Spacer(); Button("Show in Finder") { NSWorkspace.shared.open(store.support) } }
+                }
             }
-            Section("App data") {
-                HStack { Text("Settings and logs are kept outside your projects.").foregroundStyle(.secondary); Spacer(); Button("Show in Finder") { NSWorkspace.shared.open(store.support) } }
-            }
-        }.formStyle(.grouped).scrollContentBackground(.hidden)
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 20)
+        }
     }
 }
 @ViewBuilder var editorOptions: some View { Text("Visual Studio Code").tag("Visual Studio Code"); Text("Xcode").tag("Xcode"); Text("Cursor").tag("Cursor") }
