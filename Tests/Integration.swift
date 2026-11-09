@@ -45,6 +45,98 @@
         check(commitGitFiles(reader, files: [], message: "Empty").0 != 0, "Reject empty commit selection")
         check(commitGitFiles(reader, files: ["unselected.txt"], message: " ").0 != 0, "Reject blank commit message")
         check(pushGit(author).0 == 0, "Allow push when remote has no incoming changes")
+        let platformFolder = root.appendingPathComponent("Platforms")
+        try fm.createDirectory(at: platformFolder, withIntermediateDirectories: true)
+        let platformXcode = platformFolder.appendingPathComponent("App.xcodeproj")
+        try fm.createDirectory(at: platformXcode, withIntermediateDirectories: true)
+        try Data("SDKROOT = iphoneos; SUPPORTED_PLATFORMS = \"iphoneos iphonesimulator\";".utf8).write(to: platformXcode.appendingPathComponent("project.pbxproj"))
+        check(detectProjectPlatforms(at: platformFolder, xcode: platformXcode.path) == ["iOS"], "Detect iOS from Xcode SDK without duplicate simulator badges")
+        try Data("SUPPORTED_PLATFORMS = \"macosx appletvos appletvsimulator\";".utf8).write(to: platformXcode.appendingPathComponent("project.pbxproj"))
+        check(detectProjectPlatforms(at: platformFolder, xcode: platformXcode.path) == ["macOS", "tvOS"], "Detect multiple Xcode platforms")
+        let webFolder = root.appendingPathComponent("WebPlatform")
+        try fm.createDirectory(at: webFolder, withIntermediateDirectories: true)
+        try Data(#"{"dependencies":{"next":"latest"}}"#.utf8).write(to: webFolder.appendingPathComponent("package.json"))
+        check(detectProjectPlatforms(at: webFolder, xcode: nil) == ["Web"], "Identify web framework projects")
+        try Data("import PackageDescription; platforms: [.macOS(.v14)]".utf8).write(to: platformFolder.appendingPathComponent("Package.swift"))
+        try Data("SDKROOT = iphoneos;".utf8).write(to: platformXcode.appendingPathComponent("project.pbxproj"))
+        check(detectProjectPlatforms(at: platformFolder, xcode: platformXcode.path) == ["iOS"], "Do not label iOS app as macOS because of a supporting test package")
+        try Data("print('CLI')".utf8).write(to: webFolder.appendingPathComponent("cli.py"))
+        check(detectProjectPlatforms(at: webFolder, xcode: nil) == ["Web", "CLI"], "Detect Web and CLI entry points together")
+        let htmlFolder = root.appendingPathComponent("PlainHTML")
+        try fm.createDirectory(at: htmlFolder, withIntermediateDirectories: true)
+        try Data("<html></html>".utf8).write(to: htmlFolder.appendingPathComponent("home.html"))
+        try Data("flask".utf8).write(to: htmlFolder.appendingPathComponent("requirements.txt"))
+        check(detectProjectPlatforms(at: htmlFolder, xcode: nil) == ["Web"], "Detect HTML websites without index.html")
+        let workerFolder = root.appendingPathComponent("Worker")
+        try fm.createDirectory(at: workerFolder, withIntermediateDirectories: true)
+        try Data(#"{"devDependencies":{"wrangler":"latest"}}"#.utf8).write(to: workerFolder.appendingPathComponent("package.json"))
+        check(detectProjectPlatforms(at: workerFolder, xcode: nil) == ["Web"], "Detect Cloudflare web projects")
+        let oldDisk = try JSONDecoder().decode(DiskState.self, from: Data("{}".utf8))
+        check(oldDisk.devices.isEmpty && oldDisk.signingRecords.isEmpty && oldDisk.deployments.isEmpty, "Older settings load with empty device tracking")
+        let deviceJSON = Data(#"{"result":{"devices":[{"identifier":"phone","properties":{"hardware":{"udid":"phone-id","reality":"physical","platform":"iOS","marketingName":"iPhone"},"state":{"name":"Test Phone"},"connection":{"state":"connected","pairingState":"paired"}}},{"identifier":"sim","properties":{"hardware":{"reality":"simulated"}}}]}}"#.utf8)
+        let parsedDevices = try parseHopDevices(deviceJSON)
+        check(parsedDevices.count == 1 && parsedDevices[0].id == "phone-id", "Discover physical devices and exclude simulators")
+        let unpairedJSON = Data(#"{"result":{"devices":[{"identifier":"unpaired","properties":{"hardware":{"reality":"physical"},"connection":{"pairingState":"unpaired"}}}]}}"#.utf8)
+        let unpairedDevices = try parseHopDevices(unpairedJSON)
+        check(unpairedDevices.isEmpty, "Exclude unpaired devices from the device list")
+        var statusDevice = parsedDevices[0]
+        statusDevice.state = "disconnected"
+        check(statusDevice.statusLabel == "Available", "Idle developer connection displays as available")
+        statusDevice.state = "unavailable"
+        check(statusDevice.statusLabel == "Unavailable", "Unreachable device displays as unavailable")
+        let expiration = Date(timeIntervalSince1970: 2_000_000_000)
+        let profileData = try PropertyListSerialization.data(fromPropertyList: [
+            "ExpirationDate": expiration, "ProvisionedDevices": ["phone-id"],
+            "Entitlements": ["application-identifier": "TEAM.com.example.app"]
+        ], format: .xml, options: 0)
+        let parsedProfile = try parseSigningProfile(profileData)
+        check(parsedProfile.expires == expiration && parsedProfile.bundleID == "com.example.app" && parsedProfile.devices == ["phone-id"], "Read actual provisioning expiration and eligible devices")
+        do {
+            _ = try parseSigningProfile(Data("invalid".utf8))
+            check(false, "Reject invalid provisioning data")
+        } catch { check(true, "Reject invalid provisioning data") }
+        let signing = SigningRecord(projectID: "project", deviceID: "phone-id", bundleID: "com.example.app",
+                                    installedAt: expiration.addingTimeInterval(-604800), expiresAt: expiration, profileBased: true, artifactPath: "")
+        check(signing.remaining(at: expiration.addingTimeInterval(-432000)) == "5 days remaining", "Display five-day signing countdown")
+        check(signing.remaining(at: expiration) == "Expired", "Mark expired signing at the exact expiration")
+        try validateDeploymentProfile(parsedProfile, bundleID: "com.example.app", deviceID: "phone-id")
+        check(parsedProfile.expires == expiration, "Accept a reused valid profile without extending its recorded expiration")
+        do {
+            let expired = SigningProfile(expires: .distantPast, bundleID: "com.example.app", devices: ["phone-id"])
+            try validateDeploymentProfile(expired, bundleID: "com.example.app", deviceID: "phone-id")
+            check(false, "Reject expired profiles before installation")
+        } catch { check(true, "Reject expired profiles before installation") }
+        do {
+            try validateDeploymentProfile(parsedProfile, bundleID: "com.wrong.app", deviceID: "phone-id")
+            check(false, "Reject app/profile identifier mismatch")
+        } catch { check(true, "Reject app/profile identifier mismatch") }
+        do {
+            try validateDeploymentProfile(parsedProfile, bundleID: "com.example.app", deviceID: "other-device")
+            check(false, "Reject profile not signed for the selected device")
+        } catch { check(true, "Reject profile not signed for the selected device") }
+        let derivedFixture = root.appendingPathComponent("DeviceBuildFixture")
+        let deviceApp = derivedFixture.appendingPathComponent("Build/Products/Debug-iphoneos/Fixture.app")
+        let simulatorApp = derivedFixture.appendingPathComponent("Build/Products/Debug-iphonesimulator/Fixture.app")
+        for app in [deviceApp, simulatorApp] {
+            try fm.createDirectory(at: app, withIntermediateDirectories: true)
+            try PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": "com.example.app"], format: .xml, options: 0).write(to: app.appendingPathComponent("Info.plist"))
+            try Data("placeholder".utf8).write(to: app.appendingPathComponent("embedded.mobileprovision"))
+        }
+        let selectedDeviceApp = try builtDeviceApp(in: derivedFixture, preferredBundle: "com.example.app", scheme: "Fixture")
+        check(selectedDeviceApp.resolvingSymlinksInPath().path == deviceApp.resolvingSymlinksInPath().path, "Select device build and exclude simulator products")
+        let commandLog = root.appendingPathComponent("command-test.log")
+        _ = try deploymentCommand(Process(), arguments: ["--version"], log: commandLog, timeout: 10)
+        check(fm.fileExists(atPath: commandLog.path), "Capture deployment command logs outside project files")
+        do {
+            _ = try deploymentCommand(Process(), arguments: ["--find", "hop-nonexistent-test-tool"], log: commandLog, timeout: 10)
+            check(false, "Propagate failed deployment commands")
+        } catch { check(true, "Propagate failed deployment commands") }
+        var deviceDisk = DiskState()
+        deviceDisk.devices = parsedDevices; deviceDisk.signingRecords = [signing]
+        deviceDisk.deployments["project"] = DeploymentConfig(deviceID: "phone-id", scheme: "Fixture")
+        let loadedDeviceDisk = try JSONDecoder().decode(DiskState.self, from: JSONEncoder().encode(deviceDisk))
+        check(loadedDeviceDisk.devices == parsedDevices && loadedDeviceDisk.signingRecords.first?.expiresAt == expiration && loadedDeviceDisk.deployments["project"]?.scheme == "Fixture",
+              "Persist device mapping and exact signing expiration")
         let projects = root.appendingPathComponent("Development")
         let web = projects.appendingPathComponent("CC/Student's Web App")
         let old = projects.appendingPathComponent("Older App")
@@ -63,6 +155,23 @@
         check(found.count == 2, "Discover nested projects, skip dependencies, group backend services")
         check(found.first?.title == web.lastPathComponent, "Sort meaningful modification dates")
         let project = found.first!
+        let xcodeFixture = root.appendingPathComponent("Fixture.xcodeproj")
+        try fm.createDirectory(at: xcodeFixture, withIntermediateDirectories: true)
+        let xcodeObjects: [String: Any] = [
+            "app": ["productType": "com.apple.product-type.application", "buildConfigurationList": "appConfigs"],
+            "tests": ["productType": "com.apple.product-type.bundle.ui-testing", "buildConfigurationList": "testConfigs"],
+            "appConfigs": ["buildConfigurations": ["appDebug"]],
+            "testConfigs": ["buildConfigurations": ["testDebug"]],
+            "appDebug": ["buildSettings": ["PRODUCT_BUNDLE_IDENTIFIER": "com.example.fixture"]],
+            "testDebug": ["buildSettings": ["PRODUCT_BUNDLE_IDENTIFIER": "com.example.fixture.UITests"]]
+        ]
+        let xcodeData = try PropertyListSerialization.data(fromPropertyList: ["objects": xcodeObjects], format: .xml, options: 0)
+        try xcodeData.write(to: xcodeFixture.appendingPathComponent("project.pbxproj"))
+        var xcodeProject = project
+        xcodeProject.xcode = xcodeFixture.path
+        check(xcodeAppBundleID(xcodeProject) == "com.example.fixture", "Autofill bundle ID from the app target, excluding UI tests")
+        xcodeProject.xcode = nil
+        check(xcodeAppBundleID(xcodeProject) == nil, "Do not autofill Xcode metadata for ordinary projects")
         check(project.github == "https://github.com/example/project", "Resolve SSH GitHub remote")
         check(project.branch == "main" && project.changes > 0, "Read Git branch and working changes")
         check(project.suggested.count == 2, "Find root and backend launch commands")
@@ -354,7 +463,9 @@
         delegate.openSettings(nil)
         check(delegate.settingsWindow?.isVisible == true && store.settingsProject == nil, "Open a separate native settings window")
         let window = delegate.settingsWindow
+        store.projectPage = .configure
         delegate.openSettings(project.id)
+        check(store.projectPage == .overview, "Opening a project starts on Overview")
         check(delegate.settingsWindow === window && store.settingsProject == project.id, "Reuse settings window and open the selected project")
         store.reviewRequested = { project in delegate.openSettings(project.id) }
         store.beginReview(project)

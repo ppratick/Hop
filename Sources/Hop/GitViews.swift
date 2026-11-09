@@ -3,6 +3,7 @@ import SwiftUI
 struct GitActions: View {
     @ObservedObject var store: Store
     let project: Project
+    var compact = true
     var body: some View {
         let state = store.gitSync[project.id]
         VStack(alignment: .leading, spacing: 6) {
@@ -37,7 +38,7 @@ struct GitActions: View {
                     }
                 }
                 Spacer(minLength: 0)
-            }.buttonStyle(.bordered).controlSize(.mini)
+            }.buttonStyle(.bordered).controlSize(compact ? .mini : .small)
             if let state, state.ready, state.incoming > 0 {
                 if state.outgoing > 0 {
                     Text("Branches diverged. Resolve in your editor before pushing.").foregroundStyle(.orange)
@@ -45,7 +46,7 @@ struct GitActions: View {
                     Text("Commit or stash local edits before pulling.").foregroundStyle(.orange)
                 }
             }
-        }.font(.system(size: 10, weight: .medium)).padding(.horizontal, 12).padding(.bottom, 10)
+        }.font(.system(size: compact ? 10 : 12, weight: .medium)).padding(.horizontal, compact ? 12 : 0).padding(.bottom, compact ? 10 : 0)
 
     }
 }
@@ -165,7 +166,7 @@ struct GitCommitSheet: View {
             .interactiveDismissDisabled(busy)
             .task {
                 let result = await Task.detached { (changedGitFiles(project.path), checkGitSync(project.path)) }.value
-                files = result.0; remote = result.1; busy = false
+                files = result.0; selected = Set(files.map(\.path)); remote = result.1; busy = false
             }
     }
 }

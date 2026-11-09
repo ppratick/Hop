@@ -301,8 +301,6 @@ struct RootView: View {
     }
     func projectCard(_ p: Project) -> some View {
         let pref = store.prefs(p)
-        let available = store.availableActions(p)
-        let selected = pref.selected.intersection(available)
         let isOpen = store.expanded == p.id
         let running = store.services(p).contains { store.isManaged(store.key(p,$0)) || store.external.contains(store.key(p,$0)) }
         return VStack(alignment: .leading, spacing: 0) {
@@ -310,7 +308,10 @@ struct RootView: View {
                 Button { withAnimation(.easeInOut(duration: 0.15)) { store.expanded = isOpen ? nil : p.id } } label: {
                     HStack(spacing: 11) {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(store.name(p)).font(.system(size: 14, weight: .semibold)).lineLimit(1)
+                            HStack(spacing: 7) {
+                                Text(store.name(p)).font(.system(size: 14, weight: .semibold)).lineLimit(1)
+                                ProjectPlatformBadges(project: p, override: store.prefs(p).platformOverride)
+                            }
                             HStack(spacing: 5) {
                                 if !p.branch.isEmpty {
                                     Image(systemName: "arrow.triangle.branch")
@@ -334,17 +335,53 @@ struct RootView: View {
                         Button("Pull latest") { store.checkRemote(p, pull: true) }.disabled(store.syncing.contains(p.id))
                         Divider()
                     }
-                    Button("Project settings…") { store.showSettings?(p.id) }
+                    Button("Project settings…") { store.showSettings?(p.id); store.projectPage = .configure }
                     Button("Reveal in Finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: p.path) }
                     Divider()
                     Button("Hide project") { store.hideProject(p) }
                     Button("Remove from Hop", role: .destructive) { store.removeProject(p) }
                 } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 18)
             }.padding(12)
+            if p.xcode != nil {
+                ProjectDeploymentActions(store: store, project: p, compact: true).padding(.horizontal, 12).padding(.bottom, 10)
+            }
             if !p.branch.isEmpty { GitActions(store: store, project: p) }
             if isOpen {
                 Divider().padding(.horizontal, 12)
                 VStack(alignment: .leading, spacing: 12) {
+                    ProjectLaunchActions(store: store, p: p)
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "square.and.pencil").foregroundStyle(.secondary)
+                            Text("Where I left off").fontWeight(.medium)
+                        }
+                        .font(.system(size: 12))
+                        TextField("Leave a note for next time…", text: Binding(get: { store.prefs(p).note }, set: { value in store.update(p) { $0.note = value } }), axis: .vertical)
+                            .focused($focusedNote, equals: p.id)
+                            .lineLimit(3...5)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 12))
+                            .lineSpacing(3)
+                            .accessibilityLabel("Where I left off")
+                    }
+                    .padding(12)
+                    .background(Color(nsColor: .textBackgroundColor).opacity(0.6), in: RoundedRectangle(cornerRadius: 10))
+                    .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(focusedNote == p.id ? Color.primary.opacity(0.35) : Color.primary.opacity(0.08)))
+                    Button("Project settings…") { store.showSettings?(p.id); store.projectPage = .configure }.font(.caption).buttonStyle(.borderless).frame(maxWidth: .infinity, alignment: .trailing)
+                }.padding(12)
+            }
+        }.modifier(HopCard(selected: isOpen))
+    }
+}
+
+struct ProjectLaunchActions: View {
+    @ObservedObject var store: Store
+    let p: Project
+    var body: some View {
+        let pref = store.prefs(p)
+        let available = store.availableActions(p)
+        let selected = pref.selected.intersection(available)
+        VStack(alignment: .leading, spacing: 12) {
                     VStack(spacing: 10) {
                         if available.contains("editor") { action(p, "editor", "Editor", icon: "curlybraces", detail: pref.editor) }
                         action(p, "terminal", "Terminal", icon: "terminal", detail: "In project folder")
@@ -371,27 +408,7 @@ struct RootView: View {
                         if available.contains("github") { action(p, "github", "GitHub", icon: "chevron.left.forwardslash.chevron.right", detail: p.github.replacingOccurrences(of: "https://github.com/", with: "")) }
                     }
                     Button { store.launch(p) } label: { Text(selected.isEmpty ? "Select actions to launch" : "Launch selected").fontWeight(.semibold).frame(maxWidth: .infinity).padding(.vertical, 8) }.modifier(HopLaunchStyle()).tint(.blue).disabled(selected.isEmpty)
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "square.and.pencil").foregroundStyle(.secondary)
-                            Text("Where I left off").fontWeight(.medium)
-                        }
-                        .font(.system(size: 12))
-                        TextField("Leave a note for next time…", text: Binding(get: { store.prefs(p).note }, set: { value in store.update(p) { $0.note = value } }), axis: .vertical)
-                            .focused($focusedNote, equals: p.id)
-                            .lineLimit(3...5)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12))
-                            .lineSpacing(3)
-                            .accessibilityLabel("Where I left off")
-                    }
-                    .padding(12)
-                    .background(Color(nsColor: .textBackgroundColor).opacity(0.6), in: RoundedRectangle(cornerRadius: 10))
-                    .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(focusedNote == p.id ? Color.primary.opacity(0.35) : Color.primary.opacity(0.08)))
-                    Button("Project settings…") { store.showSettings?(p.id) }.font(.caption).buttonStyle(.borderless).frame(maxWidth: .infinity, alignment: .trailing)
-                }.padding(12)
-            }
-        }.modifier(HopCard(selected: isOpen))
+        }
     }
     func action(_ p: Project, _ id: String, _ title: String, icon: String, detail: String, enabled: Bool = true) -> some View {
         Toggle(isOn: Binding(get: { store.prefs(p).selected.contains(id) }, set: { checked in store.update(p) { if checked { $0.selected.insert(id) } else { $0.selected.remove(id) } } })) {
@@ -446,15 +463,26 @@ struct SettingsView: View {
                     }
                     Spacer()
                 }.padding(.horizontal, 18).padding(.top, 20).padding(.bottom, 18)
-                Button { store.settingsProject = nil } label: {
+                Button { store.settingsProject = nil; store.settingsDevices = false } label: {
                     HStack(spacing: 10) {
                         Image(systemName: "slider.horizontal.3").foregroundStyle(.blue).frame(width: 20)
                         Text("General").font(.system(size: 12, weight: .semibold))
                         Spacer()
                     }.padding(.horizontal, 12).padding(.vertical, 11)
-                        .background(Color.blue.opacity(store.settingsProject == nil ? 0.13 : 0.025), in: RoundedRectangle(cornerRadius: 10))
+                        .background(Color.black.opacity(0.14), in: RoundedRectangle(cornerRadius: 10))
+                        .background(Color.blue.opacity(store.settingsProject == nil && !store.settingsDevices ? 0.10 : 0.015), in: RoundedRectangle(cornerRadius: 10))
                         .contentShape(RoundedRectangle(cornerRadius: 10))
                 }.buttonStyle(.plain).padding(.horizontal, 12)
+                Button { store.settingsProject = nil; store.settingsDevices = true } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "iphone").foregroundStyle(.blue).frame(width: 20)
+                        Text("Devices").font(.system(size: 12, weight: .semibold))
+                        Spacer()
+                    }
+                        .padding(.horizontal, 12).padding(.vertical, 11)
+                        .background(Color.black.opacity(0.14), in: RoundedRectangle(cornerRadius: 10))
+                        .background(Color.blue.opacity(store.settingsDevices ? 0.10 : 0.015), in: RoundedRectangle(cornerRadius: 10))
+                }.buttonStyle(.plain).padding(.horizontal, 12).padding(.top, 5)
                 Divider().opacity(0.5).padding(.horizontal, 18).padding(.top, 18)
                 HStack(spacing: 8) {
                     Text("PROJECTS").font(.system(size: 10, weight: .semibold)).tracking(0.8).foregroundStyle(.secondary)
@@ -514,8 +542,8 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 0) {
                 HStack {
                     VStack(alignment: .leading, spacing: 5) {
-                        Text(selectedProject.map { store.name($0) } ?? "General").font(.system(size: 28, weight: .bold))
-                        Text(selectedProject == nil ? "Make Hop work your way." : "Editor, websites, and local services.").font(.callout).foregroundStyle(.secondary)
+                        Text(store.settingsDevices ? "Devices" : selectedProject.map { store.name($0) } ?? "General").font(.system(size: 28, weight: .bold))
+                        Text(store.settingsDevices ? "Your devices, apps, and signing expiration." : selectedProject == nil ? "Make Hop work your way." : store.projectPage == .overview ? "Your project at a glance." : "Make this project work your way.").font(.callout).foregroundStyle(.secondary)
                     }
                     Spacer()
                     if store.scanning { ProgressView().controlSize(.small) }
@@ -527,10 +555,15 @@ struct SettingsView: View {
                             .transition(.move(edge: .top).combined(with: .opacity))
                     }
                 }.animation(.easeInOut(duration: 0.2), value: store.message)
-                if let project = selectedProject { ProjectSettings(store: store, project: project) }
+                if store.settingsDevices { DevicesSettings(store: store) }
+                else if let project = selectedProject { ProjectWorkspace(store: store, project: project).id(project.id) }
                 else { general }
             }.frame(maxWidth: .infinity, maxHeight: .infinity).background(HopCanvas())
         }.background(HopCanvas()).tint(.blue).frame(minWidth: 850, idealWidth: 920, minHeight: 610, idealHeight: 720)
+            .sheet(item: $store.commitProject) { project in GitCommitSheet(store: store, project: project) }
+            .sheet(item: $store.deploymentSetupProject) { project in
+                DeploymentSetup(store: store, project: project)
+            }
             .sheet(item: $store.reviewProject, onDismiss: { store.offerNextReview() }) { project in
                 NewProjectReview(store: store, project: project)
             }
@@ -544,9 +577,12 @@ struct SettingsView: View {
         VStack(spacing: 5) {
             ForEach(projects) { p in
                 HStack(spacing: 6) {
-                    Button { store.settingsProject = p.id } label: {
+                    Button { store.settingsProject = p.id; store.settingsDevices = false; store.projectPage = .overview } label: {
                         HStack {
-                            Text(store.name(p)).lineLimit(2).foregroundStyle(store.settingsProject == p.id ? Color.white : Color.primary.opacity(0.88))
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(store.name(p)).lineLimit(2).foregroundStyle(store.settingsProject == p.id ? Color.white : Color.primary.opacity(0.88))
+                                ProjectPlatformBadges(project: p, compact: true, override: store.prefs(p).platformOverride)
+                            }
                             Spacer(minLength: 0)
                             if store.prefs(p).admission == .pending { Text("NEW").font(.system(size: 8, weight: .bold)).foregroundStyle(.orange) }
                             else if !store.isInMenu(p) { Image(systemName: "eye.slash").font(.caption2) }
@@ -667,15 +703,52 @@ struct ProjectSettings: View {
     func serviceInput(_ title: String, text: Binding<String>, prompt: String = "") -> some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(title).font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
-            TextField(title, text: text, prompt: Text(prompt)).labelsHidden().textFieldStyle(.roundedBorder).font(.system(size: 12, design: .monospaced))
+            TextField(title, text: text, prompt: Text(prompt)).labelsHidden().textFieldStyle(.plain)
+                .font(.system(size: 12, design: .monospaced))
+                .padding(10).background(.black.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.07)))
         }
     }
     var body: some View {
-        Form {
-            Section("Project") {
-                TextField("Display name", text: field(\.title), prompt: Text(project.title))
-                LabeledContent("Folder") { Text(project.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")).font(.caption).textSelection(.enabled).lineLimit(3) }
-                Picker("Folder", selection: Binding(get: { store.folderID(project) ?? "" }, set: { store.assignFolder(project.id, to: $0.isEmpty ? nil : $0) })) {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+            GeneralSettingsCard(title: "Project details", subtitle: "Name, platform, and source location.", icon: "square.stack") {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Display name").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+                    TextField("Display name", text: field(\.title), prompt: Text(project.title))
+                        .textFieldStyle(.plain).padding(10)
+                        .background(.black.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                }
+                LabeledContent("Platform badges") {
+                    Menu {
+                        Button("Detect automatically") { store.update(project) { $0.platformOverride = nil } }
+                        Divider()
+                        ForEach(["iOS", "macOS", "Web", "CLI", "Android", "tvOS", "watchOS", "visionOS", "Desktop", "API", "Python", "Swift", "Go", "Rust", "Node.js", "Project"], id: \.self) { platform in
+                            let selected = (store.prefs(project).platformOverride ?? project.platforms).contains(platform)
+                            Button {
+                                store.update(project) { pref in
+                                    var values = pref.platformOverride ?? project.platforms
+                                    if values.contains(platform) { values.removeAll { $0 == platform } }
+                                    else { values.append(platform) }
+                                    pref.platformOverride = values.isEmpty ? ["Project"] : values
+                                }
+                            } label: {
+                                if selected { Label(platform, systemImage: "checkmark") }
+                                else { Text(platform) }
+                            }
+                        }
+                    } label: {
+                        Text((store.prefs(project).platformOverride ?? project.platforms).joined(separator: " + "))
+                    }
+                }
+                Label(project.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"), systemImage: "folder")
+                    .font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
+                    .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                    .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.black.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+            }
+            GeneralSettingsCard(title: "Menu organization", subtitle: "Choose where this project appears.", icon: "sidebar.left") {
+                Picker("Hop folder", selection: Binding(get: { store.folderID(project) ?? "" }, set: { store.assignFolder(project.id, to: $0.isEmpty ? nil : $0) })) {
                     Text("Ungrouped").tag("")
                     ForEach(store.disk.folders) { folder in Text(folder.title).tag(folder.id) }
                 }
@@ -684,10 +757,21 @@ struct ProjectSettings: View {
                     if show { store.beginReview(project) }
                     else { store.update(project) { $0.admission = .settingsOnly; $0.hidden = false } }
                 }))
-                Picker("Editor", selection: field(\.editor)) { editorOptions }
-                TextField("Deployed website", text: field(\.website), prompt: Text("https://example.com"))
             }
-            Section("Local services") {
+            GeneralSettingsCard(title: "Open & launch", subtitle: "Your editor and deployed website.", icon: "arrow.up.forward.app") {
+                Picker("Editor", selection: field(\.editor)) { editorOptions }
+                serviceInput("Deployed website", text: field(\.website), prompt: "https://example.com")
+            }
+            if project.xcode != nil {
+                GeneralSettingsCard(title: "Device installation", subtitle: "Build, install, and check signing validity.", icon: "iphone") {
+                    if let config = store.disk.deployments[project.id] {
+                        LabeledContent("Device", value: store.disk.devices.first(where: { $0.id == config.deviceID })?.name ?? "Selected device")
+                        LabeledContent("Scheme", value: config.scheme)
+                    }
+                    Button("Choose device & scheme…") { store.configureDeployment(project) }
+                }
+            }
+            GeneralSettingsCard(title: "Local services", subtitle: "Commands and local websites for this project.", icon: "server.rack") {
                 if store.services(project).isEmpty { Text("Add a service to run this project locally.").foregroundStyle(.secondary) }
                 ForEach(store.services(project)) { s in
                     VStack(alignment: .leading, spacing: 12) {
@@ -705,15 +789,14 @@ struct ProjectSettings: View {
                             Spacer()
                             Button("Remove", role: .destructive) { store.update(project) { $0.services.removeAll { $0.id == s.id }; $0.selected.remove("server:" + s.id); $0.selected.remove("web:" + s.id) } }.disabled(owned)
                         }
-                    }.padding(.vertical, 6)
+                    }.padding(12).background(.black.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
                 }
                 Button("Add service", systemImage: "plus") { store.update(project) { $0.services.append(Service(name: "Local server", directory: project.path, command: "", url: "http://localhost:3000")) } }
                 Text("Check detected commands and ports before starting. You can configure frontend and backend services separately.").font(.caption).foregroundStyle(.secondary)
             }
-            Section("Where I left off") {
-                TextField("Note", text: field(\.note), axis: .vertical).lineLimit(3...6)
-            }
-        }.formStyle(.grouped).scrollContentBackground(.hidden)
+            }.toggleStyle(.switch).controlSize(.small)
+                .padding(.horizontal, 20).padding(.bottom, 20)
+        }
     }
 }
 
@@ -844,7 +927,7 @@ struct NewProjectReview: View {
     @objc func settingsAction() { openSettings(nil) }
     @objc func quitAction() { store.quit() }
     func openSettings(_ project: String?) {
-        popover.performClose(nil); store.settingsProject = project
+        popover.performClose(nil); store.settingsProject = project; store.settingsDevices = false; store.projectPage = .overview
         if settingsWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 920, height: 720), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
             window.appearance = NSAppearance(named: .darkAqua)

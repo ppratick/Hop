@@ -24,6 +24,7 @@ struct Preferences: Codable {
     var note = ""
     var selected: Set<String> = []
     var services: [Service] = []
+    var platformOverride: [String]? = nil
     var customizedServices = false
 }
 struct Project: Identifiable {
@@ -36,6 +37,7 @@ struct Project: Identifiable {
     var github: String
     var suggested: [Service]
     var xcode: String?
+    var platforms: [String] = ["Project"]
 }
 enum ProjectOrder: String, Codable, CaseIterable, Identifiable {
     case modified, alphabetical, manual
@@ -62,8 +64,11 @@ struct DiskState: Codable {
     var pinnedFirst = true
     var commandMode: CommandMode = .background
     var defaultEditor = "Visual Studio Code"
+    var deployments: [String: DeploymentConfig] = [:]
+    var devices: [HopDevice] = []
+    var signingRecords: [SigningRecord] = []
     var version = 2
-    enum CodingKeys: String, CodingKey { case root, projects, order, manualOrder, folders, groupOrder, collapsedFolders, manualPaths, removedProjects, refreshSeconds, refreshOnOpen, pinnedFirst, commandMode, defaultEditor, version }
+    enum CodingKeys: String, CodingKey { case deployments, devices, signingRecords, root, projects, order, manualOrder, folders, groupOrder, collapsedFolders, manualPaths, removedProjects, refreshSeconds, refreshOnOpen, pinnedFirst, commandMode, defaultEditor, version }
     init() {}
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -81,6 +86,9 @@ struct DiskState: Codable {
         pinnedFirst = try c.decodeIfPresent(Bool.self, forKey: .pinnedFirst) ?? true
         commandMode = try c.decodeIfPresent(CommandMode.self, forKey: .commandMode) ?? .background
         defaultEditor = try c.decodeIfPresent(String.self, forKey: .defaultEditor) ?? "Visual Studio Code"
+        deployments = try c.decodeIfPresent([String: DeploymentConfig].self, forKey: .deployments) ?? [:]
+        devices = try c.decodeIfPresent([HopDevice].self, forKey: .devices) ?? []
+        signingRecords = try c.decodeIfPresent([SigningRecord].self, forKey: .signingRecords) ?? []
         let savedVersion = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1
         if savedVersion < 2 {
             for id in Array(projects.keys) { projects[id]?.selected = [] }
@@ -165,7 +173,7 @@ func scan(_ root: String, manualPaths: [String] = []) -> [Project] {
         }
         let xcodeCandidates = children(folder) + children(folder.appendingPathComponent("ios"))
         let xcode = xcodeCandidates.first { $0.pathExtension == "xcworkspace" }?.path ?? xcodeCandidates.first { $0.pathExtension == "xcodeproj" }?.path
-        return Project(path: folder.path, title: folder.lastPathComponent, modified: modified, branch: branch.isEmpty ? (remote.isEmpty ? "" : "Detached HEAD") : branch, changes: status.isEmpty ? 0 : status.components(separatedBy: "\n").count, github: githubURL(remote), suggested: services, xcode: xcode)
+        return Project(path: folder.path, title: folder.lastPathComponent, modified: modified, branch: branch.isEmpty ? (remote.isEmpty ? "" : "Detached HEAD") : branch, changes: status.isEmpty ? 0 : status.components(separatedBy: "\n").count, github: githubURL(remote), suggested: services, xcode: xcode, platforms: detectProjectPlatforms(at: folder, xcode: xcode))
     }.sorted { $0.modified > $1.modified }
 }
 
@@ -194,6 +202,18 @@ func scan(_ root: String, manualPaths: [String] = []) -> [Project] {
     @Published var gitSync: [String: GitSyncState] = [:]
     @Published var syncing: Set<String> = []
     @Published var expanded: String?
+    @Published var discoveredDevices: [HopDevice] = []
+    @Published var discoveringDevices = false
+    @Published var deviceError = ""
+    @Published var devicesCheckedAt: Date?
+    @Published var deploymentSetupProject: Project?
+    @Published var deploymentProjectID: String?
+    @Published var deploymentStatus: [String: String] = [:]
+    var deploymentProcess: Process?
+    var deploymentLogs: [String: URL] = [:]
+    var deploymentCompletionTokens: [String: UUID] = [:]
+    @Published var settingsDevices = false
+    @Published var projectPage: ProjectPage = .overview
     @Published var settingsProject: String?
     @Published var lastRefreshed: Date?
     @Published var reviewProject: Project?
@@ -558,6 +578,7 @@ func scan(_ root: String, manualPaths: [String] = []) -> [Project] {
         }
     }
     func stopAllManaged() {
+        if let process = deploymentProcess, process.isRunning { process.terminate() }
         for p in processes.values where p.isRunning { Darwin.kill(-p.processIdentifier, SIGTERM); p.terminate() }
         for state in terminalRuns.values {
             if let record = TerminalRecord.read(state), record.isAlive { Darwin.kill(-record.pid, SIGTERM) }
