@@ -649,10 +649,31 @@ struct SettingsView: View {
                 }
                 GeneralSettingsCard(title: "Refresh & sync", subtitle: "Control how often project and Git status update.", icon: "arrow.triangle.2.circlepath") {
                     Picker("Automatic refresh", selection: setting(\.refreshSeconds)) {
-                        Text("Off").tag(0); Text("Every 15 seconds").tag(15); Text("Every 30 seconds").tag(30); Text("Every minute").tag(60); Text("Every 5 minutes").tag(300)
+                        Text("Off").tag(0)
+                        Text("Every 30 minutes").tag(1800)
+                        Text("Every hour").tag(3600)
+                        Text("Every 2 hours").tag(7200)
+                        Text("Every 4 hours").tag(14400)
                     }
                     Toggle("Refresh when opening the menu", isOn: setting(\.refreshOnOpen))
-                    HStack { if let date = store.lastRefreshed { Text("Updated \(date.formatted(date: .omitted, time: .shortened))").foregroundStyle(.secondary) }; Spacer(); Button("Refresh now") { store.refresh() }.disabled(store.scanning) }
+                    Picker("Remote check on menu open", selection: setting(\.menuRemoteSeconds)) {
+                        Text("Local only").tag(0)
+                        Text("After 5 minutes").tag(300)
+                        Text("After 15 minutes").tag(900)
+                        Text("After 30 minutes").tag(1800)
+                        Text("After an hour").tag(3600)
+                    }
+                    .disabled(!store.disk.refreshOnOpen)
+                    .help("Checks each repository when its last remote attempt is at least this old.")
+                    HStack {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(store.lastRefreshed.map { "Local updated " + $0.formatted(date: .omitted, time: .shortened) } ?? "Local status not checked yet")
+                            Text(store.lastRemoteChecked.map { "Remote checked " + $0.formatted(date: .omitted, time: .shortened) } ?? "Remote not checked yet")
+                                .help("Most recent successful remote repository check.")
+                        }.font(.system(size: 11)).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Refresh now") { store.refresh(forceRemote: true) }.disabled(store.scanning)
+                    }
                 }
                 GeneralSettingsCard(title: "Folders", subtitle: "Organize your menu without moving project files.", icon: "folder") {
                     ForEach(store.disk.folders) { folder in
@@ -952,7 +973,7 @@ struct NewProjectReview: View {
             NSApp.activate(ignoringOtherApps: true)
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
-            if store.disk.refreshOnOpen { store.refresh() }
+            if store.disk.refreshOnOpen { store.refresh(localOnly: true) }
         }
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

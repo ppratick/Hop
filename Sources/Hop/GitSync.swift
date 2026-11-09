@@ -7,7 +7,7 @@ struct GitSyncState {
     var ready = false
 }
 
-func syncGit(_ path: String, _ arguments: [String]) -> (Int32, String) {
+func syncGit(_ path: String, _ arguments: [String], trimOutput: Bool = true) -> (Int32, String) {
     let process = Process(), pipe = Pipe()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
     process.arguments = ["-C", path] + arguments
@@ -23,15 +23,17 @@ func syncGit(_ path: String, _ arguments: [String]) -> (Int32, String) {
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit(); timeout.cancel()
         let output = String(decoding: data, as: UTF8.self)
-        return (process.terminationStatus, arguments.contains("-z") ? output : output.trimmingCharacters(in: .whitespacesAndNewlines))
+        return (process.terminationStatus, (arguments.contains("-z") || !trimOutput) ? output : output.trimmingCharacters(in: .whitespacesAndNewlines))
     } catch { return (-1, error.localizedDescription) }
 }
 
-func checkGitSync(_ path: String) -> GitSyncState {
+func checkGitSync(_ path: String, fetch: Bool = true) -> GitSyncState {
     let upstream = syncGit(path, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])
     guard upstream.0 == 0 else { return GitSyncState(detail: "No upstream branch") }
-    let fetched = syncGit(path, ["fetch", "--quiet"])
-    guard fetched.0 == 0 else { return GitSyncState(detail: "Remote unavailable · retry to check") }
+    if fetch {
+        let fetched = syncGit(path, ["fetch", "--quiet"])
+        guard fetched.0 == 0 else { return GitSyncState(detail: "Remote unavailable · retry to check") }
+    }
     let counts = syncGit(path, ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"])
     let values = counts.1.split(whereSeparator: { $0.isWhitespace }).compactMap { Int($0) }
     guard counts.0 == 0, values.count == 2 else { return GitSyncState(detail: "Couldn’t compare branches") }
@@ -39,8 +41,10 @@ func checkGitSync(_ path: String) -> GitSyncState {
 }
 
 extension Store {
-    func checkRemote(_ project: Project, pull: Bool = false) {
+    func checkRemote(_ project: Project, pull: Bool = false, force: Bool = true, minimumInterval: Int = 300) {
         guard !project.branch.isEmpty, !syncing.contains(project.id) else { return }
+        let fetch = shouldFetchRemote(lastAttempt: remoteFetchDates[project.id], force: force || pull, minimumInterval: minimumInterval)
+        if fetch { remoteFetchDates[project.id] = Date() }
         syncing.insert(project.id)
         Task {
             let result = await Task.detached(priority: .utility) { () -> (GitSyncState, String?) in
@@ -54,9 +58,12 @@ extension Store {
                         return (checkGitSync(project.path), "Pull failed. Hop hasn’t reset or stashed your work. " + pulled.1)
                     }
                 }
-                return (checkGitSync(project.path), nil)
+                return (checkGitSync(project.path, fetch: fetch), nil)
             }.value
-            gitSync[project.id] = result.0
+            if !fetch, gitSync[project.id]?.ready == false {
+                // Do not turn an unverified remote state into "Up to date" using stale refs.
+            } else { gitSync[project.id] = result.0 }
+            if fetch && result.0.ready { lastRemoteChecked = Date() }
             syncing.remove(project.id)
             if let error = result.1 { message = error }
             if pull { refresh() }
@@ -115,4 +122,50 @@ extension Store {
             refresh()
         }
     }
+}
+
+func shouldFetchRemote(lastAttempt: Date?, now: Date = Date(), force: Bool = false, minimumInterval: Int = 300) -> Bool {
+    force || (minimumInterval > 0 && (lastAttempt.map { now.timeIntervalSince($0) >= Double(minimumInterval) } ?? true))
+}
+
+func localProjectStatus(_ project: Project) -> Project {
+    var updated = project
+    guard FileManager.default.fileExists(atPath: URL(fileURLWithPath: project.path).appendingPathComponent(".git").path) else { return updated }
+    let branch = capture("/usr/bin/git", ["--no-optional-locks", "-C", project.path, "branch", "--show-current"])
+    let status = capture("/usr/bin/git", ["--no-optional-locks", "-C", project.path, "status", "--porcelain", "--untracked-files=normal"])
+    updated.branch = branch.isEmpty ? "Detached HEAD" : branch
+    updated.changes = status.isEmpty ? 0 : status.components(separatedBy: "\n").count
+    return updated
+}
+
+func gitFileDiff(_ root: String, file: String) -> String {
+    let base = URL(fileURLWithPath: root).standardizedFileURL
+    let url = base.appendingPathComponent(file).standardizedFileURL
+    guard url.path.hasPrefix(base.path + "/") else { return "This file is outside the project." }
+    let maxSize = 1_000_000
+    if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > maxSize {
+        return "This file is too large for an inline preview. Review it in your editor."
+    }
+    let hasHead = syncGit(root, ["rev-parse", "--verify", "HEAD"]).0 == 0
+    let tracked = hasHead && syncGit(root, ["cat-file", "-e", "HEAD:" + file]).0 == 0
+    if tracked, let oldSize = Int(syncGit(root, ["cat-file", "-s", "HEAD:" + file]).1), oldSize > maxSize {
+        return "The committed file is too large for an inline preview. Review it in your editor."
+    }
+    let flags = ["--no-ext-diff", "--no-textconv", "--no-color", "--no-renames"]
+    let result: (Int32, String)
+    if tracked {
+        result = syncGit(root, ["diff"] + flags + ["HEAD", "--", ":(literal)" + file], trimOutput: false)
+    } else {
+        // --no-index represents the entire contents of newly added files.
+        guard FileManager.default.fileExists(atPath: url.path) ||
+                (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true else {
+            return "No contents to preview (the file may have been removed)."
+        }
+        result = syncGit(root, ["diff", "--no-index"] + flags + ["--", "/dev/null", url.path], trimOutput: false)
+    }
+    guard result.0 == 0 || (!tracked && result.0 == 1) else { return "Couldn’t read the diff. Refresh the file list or review this file in your editor." }
+    if result.1.isEmpty { return "No changes compared with the last commit." }
+    let limit = 120_000
+    if result.1.count > limit { return String(result.1.prefix(limit)) + "\n\nPreview truncated. Review the full change in your editor." }
+    return result.1
 }

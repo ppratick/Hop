@@ -59,7 +59,8 @@ struct DiskState: Codable {
     var collapsedFolders: Set<String> = []
     var manualPaths: [String] = []
     var removedProjects: Set<String> = []
-    var refreshSeconds = 60
+    var refreshSeconds = 1800
+    var menuRemoteSeconds = 300
     var refreshOnOpen = true
     var pinnedFirst = true
     var commandMode: CommandMode = .background
@@ -68,7 +69,7 @@ struct DiskState: Codable {
     var devices: [HopDevice] = []
     var signingRecords: [SigningRecord] = []
     var version = 2
-    enum CodingKeys: String, CodingKey { case deployments, devices, signingRecords, root, projects, order, manualOrder, folders, groupOrder, collapsedFolders, manualPaths, removedProjects, refreshSeconds, refreshOnOpen, pinnedFirst, commandMode, defaultEditor, version }
+    enum CodingKeys: String, CodingKey { case deployments, devices, signingRecords, root, projects, order, manualOrder, folders, groupOrder, collapsedFolders, manualPaths, removedProjects, refreshSeconds, menuRemoteSeconds, refreshOnOpen, pinnedFirst, commandMode, defaultEditor, version }
     init() {}
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -81,7 +82,9 @@ struct DiskState: Codable {
         collapsedFolders = try c.decodeIfPresent(Set<String>.self, forKey: .collapsedFolders) ?? []
         manualPaths = try c.decodeIfPresent([String].self, forKey: .manualPaths) ?? []
         removedProjects = try c.decodeIfPresent(Set<String>.self, forKey: .removedProjects) ?? []
-        refreshSeconds = try c.decodeIfPresent(Int.self, forKey: .refreshSeconds) ?? 60
+        refreshSeconds = try c.decodeIfPresent(Int.self, forKey: .refreshSeconds) ?? 1800
+        if ![0, 1800, 3600, 7200, 14400].contains(refreshSeconds) { refreshSeconds = 1800 }
+        menuRemoteSeconds = try c.decodeIfPresent(Int.self, forKey: .menuRemoteSeconds) ?? 300
         refreshOnOpen = try c.decodeIfPresent(Bool.self, forKey: .refreshOnOpen) ?? true
         pinnedFirst = try c.decodeIfPresent(Bool.self, forKey: .pinnedFirst) ?? true
         commandMode = try c.decodeIfPresent(CommandMode.self, forKey: .commandMode) ?? .background
@@ -199,6 +202,7 @@ func scan(_ root: String, manualPaths: [String] = []) -> [Project] {
     @Published var phases: [String: String] = [:]
     @Published var external: Set<String> = []
     @Published var commitProject: Project?
+    var remoteFetchDates: [String: Date] = [:]
     @Published var gitSync: [String: GitSyncState] = [:]
     @Published var syncing: Set<String> = []
     @Published var expanded: String?
@@ -215,6 +219,7 @@ func scan(_ root: String, manualPaths: [String] = []) -> [Project] {
     @Published var settingsDevices = false
     @Published var projectPage: ProjectPage = .overview
     @Published var settingsProject: String?
+    @Published var lastRemoteChecked: Date?
     @Published var lastRefreshed: Date?
     @Published var reviewProject: Project?
     @Published var draggingProject: String?
@@ -384,8 +389,20 @@ func scan(_ root: String, manualPaths: [String] = []) -> [Project] {
         do { try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true); try JSONEncoder().encode(disk).write(to: stateURL, options: .atomic) }
         catch { message = "Couldn’t save settings: \(error.localizedDescription)" }
     }
-    func refresh() {
+    func refresh(localOnly: Bool = false, forceRemote: Bool = false) {
         guard !scanning else { return }; scanning = true
+        if localOnly && !projects.isEmpty {
+            let snapshot = projects, root = disk.root
+            Task {
+                let updated = await Task.detached(priority: .utility) { snapshot.map(localProjectStatus) }.value
+                guard disk.root == root else { scanning = false; refresh(); return }
+                projects = updated.filter { !disk.removedProjects.contains($0.id) }
+                scanning = false; lastRefreshed = Date()
+                for project in projects { checkRemote(project, force: forceRemote, minimumInterval: disk.menuRemoteSeconds) }
+                await probeAll()
+            }
+            return
+        }
         let root = disk.root
         let manualPaths = disk.manualPaths
         Task {
@@ -400,7 +417,7 @@ func scan(_ root: String, manualPaths: [String] = []) -> [Project] {
             projects = found; scanning = false; lastRefreshed = Date(); save()
             if !FileManager.default.fileExists(atPath: root) { message = "Project folder isn’t available. Choose a folder from Settings." }
             offerNextReview()
-            for project in found { checkRemote(project) }
+            for project in found { checkRemote(project, force: forceRemote, minimumInterval: localOnly ? disk.menuRemoteSeconds : 300) }
             await probeAll()
         }
     }

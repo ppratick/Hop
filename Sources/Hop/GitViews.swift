@@ -57,12 +57,14 @@ struct GitCommitSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var files: [GitFile] = []
     @State private var selected: Set<String> = []
+    @State private var previewFile: String?
     @State private var message = ""
     @State private var error = ""
     @State private var busy = true
     @State private var acknowledged = false
     @State private var remote = GitSyncState()
-    var warning: Bool { !remote.ready || remote.incoming > 0 }
+    @State private var checkingRemote = true
+    var warning: Bool { !checkingRemote && (!remote.ready || remote.incoming > 0) }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 12) {
@@ -78,6 +80,12 @@ struct GitCommitSheet: View {
                 Spacer()
             }
             Text("Choose the files to include in this commit.").font(.callout).foregroundStyle(.secondary)
+            if checkingRemote {
+                HStack(spacing: 7) {
+                    ProgressView().controlSize(.mini)
+                    Text("Checking remote…").font(.caption).foregroundStyle(.secondary)
+                }
+            }
             if warning {
                 Text(remote.ready ? "↓ \(remote.incoming) remote commits haven’t been pulled. Committing now may create diverged branches." : "Remote status could not be verified: \(remote.detail)")
                     .font(.callout).foregroundStyle(.orange)
@@ -90,36 +98,42 @@ struct GitCommitSheet: View {
                     selected = selected.count == files.count ? [] : Set(files.map(\.path))
                 }.disabled(busy || files.isEmpty)
             }.font(.caption)
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(files) { file in
-                        Toggle(isOn: Binding(get: { selected.contains(file.path) }, set: { on in
-                            if on { selected.insert(file.path) } else { selected.remove(file.path) }
-                        })) {
-                            HStack(spacing: 10) {
-                                Image(systemName: "doc.text").foregroundStyle(.secondary)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text((file.path as NSString).lastPathComponent)
-                                        .font(.system(size: 12, weight: .medium))
-                                        .lineLimit(1).truncationMode(.middle)
-                                    let folder = (file.path as NSString).deletingLastPathComponent
-                                    if !folder.isEmpty {
-                                        Text(folder).font(.system(size: 10)).foregroundStyle(.secondary)
-                                            .lineLimit(1).truncationMode(.middle)
-                                    }
-                                }
-                                Spacer(minLength: 0)
-                            }.padding(.leading, 5)
+            HStack(spacing: 0) {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(files) { file in
+                            HStack(spacing: 8) {
+                                Toggle("Include " + file.path, isOn: Binding(get: { selected.contains(file.path) }, set: { on in
+                                    if on { selected.insert(file.path) } else { selected.remove(file.path) }
+                                })).labelsHidden().toggleStyle(.checkbox)
+                                Button { previewFile = file.path } label: {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text((file.path as NSString).lastPathComponent)
+                                            .font(.system(size: 12, weight: .medium)).lineLimit(1).truncationMode(.middle)
+                                        let folder = (file.path as NSString).deletingLastPathComponent
+                                        if !folder.isEmpty {
+                                            Text(folder).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                                        }
+                                    }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                                }.buttonStyle(.plain).help("Preview " + file.path)
+                            }
+                            .padding(.horizontal, 12).padding(.vertical, 10)
+                            .background(previewFile == file.path ? Color.blue.opacity(0.16) : .clear)
+                            if file.id != files.last?.id { Divider().padding(.leading, 36) }
                         }
-                        .toggleStyle(.checkbox)
-                        .padding(.horizontal, 14).padding(.vertical, 10)
-                        .background(selected.contains(file.path) ? Color.blue.opacity(0.07) : .clear)
-                        .help(file.path)
-                        if file.id != files.last?.id { Divider().padding(.leading, 42) }
                     }
+                }.frame(width: 245)
+                Divider()
+                if let previewFile {
+                    GitDiffPreview(projectPath: project.path, file: previewFile)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    Text(files.isEmpty ? "No changed files" : "Choose a file to preview")
+                        .foregroundStyle(.secondary).font(.callout)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-            .frame(height: 220)
+            .frame(height: 270)
             .background(.black.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.primary.opacity(0.08)))
@@ -148,6 +162,9 @@ struct GitCommitSheet: View {
                     let chosen = Array(selected), text = message
                     Task {
                         let latest = await Task.detached { checkGitSync(project.path) }.value
+                        store.remoteFetchDates[project.id] = Date()
+                        store.gitSync[project.id] = latest
+                        if latest.ready { store.lastRemoteChecked = Date() }
                         if (latest.incoming > remote.incoming || (!latest.ready && remote.ready)) {
                             remote = latest; acknowledged = false; busy = false
                             store.syncing.remove(project.id)
@@ -160,13 +177,60 @@ struct GitCommitSheet: View {
                         if result.0 == 0 { store.refresh(); dismiss() }
                         else { error = result.1 }
                     }
-                }.buttonStyle(.borderedProminent).disabled(busy || selected.isEmpty || message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (warning && !acknowledged))
+                }.buttonStyle(.borderedProminent).disabled(busy || checkingRemote || selected.isEmpty || message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (warning && !acknowledged))
             }
-        }.padding(24).frame(width: 500).disabled(store.syncing.contains(project.id) && !busy)
+        }.padding(24).frame(width: 820).disabled(store.syncing.contains(project.id) && !busy)
             .interactiveDismissDisabled(busy)
             .task {
-                let result = await Task.detached { (changedGitFiles(project.path), checkGitSync(project.path)) }.value
-                files = result.0; selected = Set(files.map(\.path)); remote = result.1; busy = false
+                let loadedFiles = await Task.detached { changedGitFiles(project.path) }.value
+                guard !Task.isCancelled else { return }
+                files = loadedFiles; selected = Set(files.map(\.path)); previewFile = files.first?.path; busy = false
+                let checked = await Task.detached { checkGitSync(project.path) }.value
+                guard !Task.isCancelled else { return }
+                remote = checked; checkingRemote = false
+                store.remoteFetchDates[project.id] = Date(); store.gitSync[project.id] = checked
+                if checked.ready { store.lastRemoteChecked = Date() }
             }
+    }
+}
+
+private struct GitDiffPreview: View {
+    let projectPath: String
+    let file: String
+    @State private var diff = AttributedString()
+    @State private var loading = true
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(file).font(.system(size: 11, weight: .medium, design: .monospaced)).lineLimit(1).truncationMode(.middle).help(file)
+                Text("Compared with HEAD · staged + unstaged")
+                    .font(.system(size: 9)).foregroundStyle(.secondary)
+            }.padding(10)
+            Divider()
+            if loading {
+                ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView([.horizontal, .vertical]) {
+                    Text(diff).font(.system(size: 11, design: .monospaced))
+                        .textSelection(.enabled).fixedSize(horizontal: true, vertical: true)
+                        .padding(10).frame(maxWidth: .infinity, alignment: .topLeading)
+                }
+            }
+        }
+        .task(id: file) {
+            loading = true
+            let text = await Task.detached(priority: .utility) { gitFileDiff(projectPath, file: file) }.value
+            guard !Task.isCancelled else { return }
+            var styled = AttributedString()
+            for line in text.components(separatedBy: "\n") {
+                var value = AttributedString(line + "\n")
+                if line.hasPrefix("+++") || line.hasPrefix("---") || line.hasPrefix("@@") { value.foregroundColor = .secondary }
+                else if line.hasPrefix("+") { value.foregroundColor = .green }
+                else if line.hasPrefix("-") { value.foregroundColor = .red }
+                styled.append(value)
+            }
+            diff = styled
+            loading = false
+        }
     }
 }
