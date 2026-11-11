@@ -240,9 +240,11 @@ func scan(_ root: String, manualPaths: [String] = []) -> [Project] {
     var logURLs: [String: URL] = [:]
     var timer: Timer?
     let support: URL
+    let openAI: OpenAIUsageStore
     var stateURL: URL { support.appendingPathComponent("settings.json") }
     init(storage: URL? = nil, root: String? = nil, autoRefresh: Bool = true) {
         support = storage ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Hop")
+        openAI = OpenAIUsageStore(support: support, automaticRefreshEnabled: storage == nil)
         let legacyURLs = ["Switchyard/settings.json", "ProjectDock/settings.json"].map { support.deletingLastPathComponent().appendingPathComponent($0) }
         let oldStateURL = legacyURLs.first { FileManager.default.fileExists(atPath: $0.path) } ?? stateURL
         let loadURL = FileManager.default.fileExists(atPath: stateURL.path) ? stateURL : (storage == nil ? oldStateURL : stateURL)
@@ -391,6 +393,7 @@ func scan(_ root: String, manualPaths: [String] = []) -> [Project] {
     }
     func refresh(localOnly: Bool = false, forceRemote: Bool = false) {
         guard !scanning else { return }; scanning = true
+        Task { await openAI.refresh(force: forceRemote) }
         if localOnly && !projects.isEmpty {
             let snapshot = projects, root = disk.root
             Task {

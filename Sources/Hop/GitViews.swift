@@ -38,6 +38,9 @@ struct GitActions: View {
                     }
                 }
                 Spacer(minLength: 0)
+                if compact && project.xcode != nil {
+                    ProjectDeploymentActions(store: store, project: project, compact: true)
+                }
             }.buttonStyle(.bordered).controlSize(compact ? .mini : .small)
             if let state, state.ready, state.incoming > 0 {
                 if state.outgoing > 0 {

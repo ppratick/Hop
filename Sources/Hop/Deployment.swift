@@ -6,6 +6,12 @@ struct DeploymentConfig: Codable {
     var scheme: String
     var buildID = UUID().uuidString
     var artifactPath = ""
+    var developmentTeam: String? = nil
+}
+
+func deploymentSigningArguments(_ config: DeploymentConfig) -> [String] {
+    guard let team = config.developmentTeam?.trimmingCharacters(in: .whitespacesAndNewlines), !team.isEmpty else { return [] }
+    return ["DEVELOPMENT_TEAM=" + team]
 }
 
 func xcodeContainerArguments(_ project: Project) throws -> [String] {
@@ -129,7 +135,7 @@ extension Store {
                 let args = ["xcodebuild"] + (try xcodeContainerArguments(project)) +
                     ["-scheme", config.scheme, "-configuration", "Debug", "-destination", "id=" + config.deviceID,
                      "-derivedDataPath", base.appendingPathComponent("DerivedData").path,
-                     "-allowProvisioningUpdates", "-allowProvisioningDeviceRegistration", "build"]
+                     "-allowProvisioningUpdates", "-allowProvisioningDeviceRegistration", "build"] + deploymentSigningArguments(config)
                 _ = try await Task.detached { try deploymentCommand(process, arguments: args, log: log) }.value
                 let record = try await Task.detached {
                     let app = try builtDeviceApp(in: base.appendingPathComponent("DerivedData"), preferredBundle: xcodeAppBundleID(project), scheme: config.scheme)
@@ -170,7 +176,9 @@ struct ProjectDeploymentActions: View {
     @ObservedObject var store: Store
     let project: Project
     let compact: Bool
+    var statusOnly = false
     @State private var localProfile: SigningProfile?
+    @State private var showingDetails = false
     var config: DeploymentConfig? { store.disk.deployments[project.id] }
     var record: SigningRecord? {
         store.disk.signingRecords.first { $0.projectID == project.id && $0.deviceID == config?.deviceID && $0.installedByHop == true }
@@ -183,7 +191,80 @@ struct ProjectDeploymentActions: View {
                              artifactPath: config.artifactPath)
     }
     var body: some View {
-        VStack(alignment: .leading, spacing: compact ? 8 : 12) {
+        Group {
+            if statusOnly {
+                signingStatus
+            } else if compact {
+                compactActions
+            } else {
+                details
+            }
+        }
+        .task(id: (config?.artifactPath ?? "") + "|" + (config?.deviceID ?? "")) {
+            localProfile = nil
+            if let config, !config.artifactPath.isEmpty {
+                let path = config.artifactPath
+                let profile = await Task.detached { try? loadSigningProfile(URL(fileURLWithPath: path)) }.value
+                if !Task.isCancelled, let profile, profile.devices.contains(config.deviceID) { localProfile = profile }
+            }
+            if !statusOnly && (store.devicesCheckedAt == nil || Date().timeIntervalSince(store.devicesCheckedAt!) > 120) { store.discoverDevices() }
+        }
+    }
+    private var signingStatus: some View {
+        Group {
+            if let displayRecord {
+                TimelineView(.periodic(from: .now, by: 60)) { tick in
+                    Text(displayRecord.remaining(at: tick.date))
+                        .foregroundStyle(displayRecord.tint)
+                }
+                .help((record == nil ? "Local build profile; installation not verified. " : "Installed app signing. ") +
+                      "Expires " + displayRecord.expiresAt.formatted(date: .abbreviated, time: .shortened))
+            }
+            else {
+                Text("Expiry unknown").foregroundStyle(.secondary)
+                    .help("Build and install to record the app’s signing expiration.")
+            }
+        }.lineLimit(1)
+    }
+    private var compactActions: some View {
+        HStack(spacing: 7) {
+            if store.deploymentProjectID == project.id {
+                ProgressView().controlSize(.mini)
+                    .help(store.deploymentStatus[project.id] ?? "Building…")
+            } else {
+                Button {
+                    if config != nil { store.deploy(project) }
+                    else { store.configureDeployment(project) }
+                } label: {
+                    Text("Build & Install").fixedSize()
+                }
+                .buttonStyle(.borderless)
+                .disabled(store.deploymentBusy || (config.map { !store.deploymentAvailable($0.deviceID) } ?? false))
+                .help(config.map { config in
+                    let device = store.disk.devices.first { $0.id == config.deviceID }?.name ?? "selected device"
+                    return store.deploymentAvailable(config.deviceID) ? "Build & install on " + device : "Connect " + device + " to install"
+                } ?? "Choose device & scheme to build and install")
+            }
+            Button { showingDetails.toggle() } label: {
+                Image(systemName: "slider.horizontal.3")
+            }
+            .buttonStyle(.borderless)
+            .help("Device, signing & installation details")
+            .accessibilityLabel("Device, signing & installation details")
+            .popover(isPresented: $showingDetails, arrowEdge: .trailing) {
+                ProjectDeploymentActions(store: store, project: project, compact: false)
+                    .padding(16).frame(width: 320)
+            }
+        }
+        .font(.system(size: 10, weight: .medium))
+        .foregroundStyle(.blue)
+    }
+    private var details: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if displayRecord == nil {
+                Text("Expiry unknown").font(.caption).foregroundStyle(.secondary)
+                    .help("Build and install to record the app’s signing expiration.")
+            }
             if let config {
                 HStack(spacing: 8) {
                     Image(systemName: store.disk.devices.first(where: { $0.id == config.deviceID })?.symbol ?? "iphone")
@@ -215,8 +296,7 @@ struct ProjectDeploymentActions: View {
                     }.padding(.vertical, 4)
                 } else {
                     HStack(spacing: 10) {
-                        let built = !config.artifactPath.isEmpty && FileManager.default.fileExists(atPath: config.artifactPath)
-                        Button(store.deploymentAvailable(config.deviceID) ? (built ? "Rebuild & Install" : "Build & Install") : "Connect device") {
+                        Button(store.deploymentAvailable(config.deviceID) ? "Build & Install" : "Connect device") {
                             store.deploy(project)
                         }.buttonStyle(.bordered).tint(.blue).controlSize(.small)
                             .disabled(!store.deploymentAvailable(config.deviceID) || store.deploymentBusy)
@@ -247,7 +327,7 @@ struct ProjectDeploymentActions: View {
                 }
             } else {
                 Button { store.configureDeployment(project) } label: {
-                    Label("Build & Install…", systemImage: "iphone")
+                    Text("Build & Install…")
                         .font(.system(size: compact ? 10 : 11, weight: .medium))
                         .lineLimit(1).fixedSize(horizontal: true, vertical: false)
                         .frame(minWidth: compact ? 112 : 150, minHeight: compact ? 20 : 24)
@@ -259,18 +339,7 @@ struct ProjectDeploymentActions: View {
             }
         }
         .font(.system(size: compact ? 10 : 12))
-        .padding(compact && config != nil ? 10 : 0)
-        .background(Color.black.opacity(compact && config != nil ? 0.12 : 0), in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.white.opacity(compact && config != nil ? 0.045 : 0)))
-        .task(id: (config?.artifactPath ?? "") + "|" + (config?.deviceID ?? "")) {
-            localProfile = nil
-            if let config, !config.artifactPath.isEmpty {
-                let path = config.artifactPath
-                let profile = await Task.detached { try? loadSigningProfile(URL(fileURLWithPath: path)) }.value
-                if !Task.isCancelled, let profile, profile.devices.contains(config.deviceID) { localProfile = profile }
-            }
-            if store.devicesCheckedAt == nil || Date().timeIntervalSince(store.devicesCheckedAt!) > 120 { store.discoverDevices() }
-        }
+
     }
 }
 
@@ -281,12 +350,13 @@ struct DeploymentSetup: View {
     @State private var deviceID = ""
     @State private var scheme = ""
     @State private var schemes: [String] = []
+    @State private var developmentTeam = ""
     @State private var loading = true
     @State private var error = ""
     @State private var detectedArtifact = ""
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Label("Build & Install", systemImage: "hammer").font(.title2.bold())
+            Text("Build & Install").font(.title2.bold())
             Text(store.name(project)).foregroundStyle(.secondary)
             Picker("Device", selection: $deviceID) {
                 Text("Choose a device").tag("")
@@ -299,6 +369,9 @@ struct DeploymentSetup: View {
                 Text("Choose a scheme").tag("")
                 ForEach(schemes, id: \.self) { Text($0).tag($0) }
             }
+            TextField("Development team ID (optional)", text: $developmentTeam)
+            Text("Leave blank to use the project’s signing team. Applies to the app and its extensions.")
+                .font(.caption).foregroundStyle(.secondary)
             if loading { ProgressView().controlSize(.small) }
             if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.orange) }
             Text("Each build lets Xcode update signing automatically, then installs the app and records the actual profile expiration.")
@@ -308,9 +381,11 @@ struct DeploymentSetup: View {
                 Spacer()
                 Button("Save") {
                     var config = store.disk.deployments[project.id] ?? DeploymentConfig(deviceID: deviceID, scheme: scheme)
-                    if config.deviceID != deviceID || config.scheme != scheme {
+                    let team = developmentTeam.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if config.deviceID != deviceID || config.scheme != scheme || (config.developmentTeam ?? "") != team {
                         config = DeploymentConfig(deviceID: deviceID, scheme: scheme)
                     }
+                    config.developmentTeam = team.isEmpty ? nil : team
                     if config.artifactPath.isEmpty { config.artifactPath = detectedArtifact }
                     store.disk.deployments[project.id] = config
                     store.save(); dismiss()
@@ -318,7 +393,9 @@ struct DeploymentSetup: View {
             }
         }.padding(24).frame(width: 470)
         .task {
-            if let config = store.disk.deployments[project.id] { deviceID = config.deviceID; scheme = config.scheme }
+            if let config = store.disk.deployments[project.id] {
+                deviceID = config.deviceID; scheme = config.scheme; developmentTeam = config.developmentTeam ?? ""
+            }
             else if store.disk.devices.count == 1 { deviceID = store.disk.devices[0].id }
             do {
                 schemes = try await Task.detached { try deploymentSchemes(project) }.value

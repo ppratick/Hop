@@ -9,6 +9,73 @@
     }
     do {
         try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        let reportDate = ISO8601DateFormatter().date(from: "2026-11-11T12:00:00Z")!
+        let month = openAIMonthStart(reportDate)
+        var reporting = OpenAIUsageState()
+        reporting.links = ["app": ["key_tally", "key_rotated"]]
+        reporting.updatedAt = reportDate
+        reporting.costs = [OpenAICostDay(day: month - 86400, keyID: "key_rotated", amount: Decimal(string: "1.25")!),
+                           OpenAICostDay(day: month, keyID: "key_tally", amount: Decimal(string: "0.15")!),
+                           OpenAICostDay(day: month, keyID: "other", amount: 99)]
+        let spending = openAISpending(reporting, projectID: "app", now: reportDate)!
+        check(spending.month == Decimal(string: "0.15") && spending.total == Decimal(string: "1.40"),
+              "Month and total include linked current and rotated keys without other apps")
+        check(openAISpending(reporting, projectID: "unlinked", now: reportDate) == nil,
+              "Unlinked projects never show invented zero spending")
+        reporting.updatedAt = Date(timeIntervalSince1970: Double(month - 1))
+        check(openAISpending(reporting, projectID: "app", now: reportDate)?.month == nil,
+              "A previous-month cache cannot report zero for an unsynced new month")
+        check(mergeOpenAICosts(reporting.costs, [], since: month).count == 1,
+              "Revised zero-cost days replace old values while older history is preserved")
+        check(openAIMoney(Decimal(string: "0.0012")!) == "$0.0012" && openAIMoney(Decimal(string: "0.00001")!) == "<$0.0001",
+              "Small nonzero costs do not round silently to zero")
+        let fixture = OpenAIReportingFixture(month: month)
+        let reportingClient = OpenAIClient(key: "fixture-key", transport: { request in try await fixture.send(request) })
+        let catalog = try await reportingClient.catalog()
+        check(catalog.count == 3 && catalog.contains { $0.id == "key_tally" && $0.name == "Tally" },
+              "Read and paginate OpenAI project and key catalogs")
+        var expiringKey = catalog[0]
+        expiringKey.expiresAt = Int(reportDate.timeIntervalSince1970)
+        check(!expiringKey.selectable(at: reportDate), "Hide an API key at its exact expiration")
+        expiringKey.expiresAt! += 1
+        check(expiringKey.selectable(at: reportDate), "Keep unexpired keys available for selection")
+        expiringKey.historical = true
+        check(!expiringKey.selectable(at: reportDate), "Hide revoked and historical keys from the picker")
+        let report = try await reportingClient.report(since: month - 86400, now: reportDate)
+        check(report.costs.reduce(Decimal.zero) { $0 + $1.amount } == Decimal(string: "1.40"),
+              "Paginate cost buckets and preserve decimal charges and credits")
+        check(report.unattributed && !report.costs.contains { $0.keyID.isEmpty },
+              "Exclude unattributed organization charges from individual app totals")
+        check(report.historicalKeys.contains { $0.id == "key_rotated" },
+              "Make rotated or revoked keys from reporting available for linking")
+        check(report.usage.reduce(0) { $0 + $1.requests } == 3 && report.usage.reduce(0) { $0 + $1.input } == 150,
+              "Paginate monthly model usage without losing requests or tokens")
+        let validReportingRequests = await fixture.validRequests()
+        check(validReportingRequests, "Reporting uses only authenticated GETs to OpenAI with grouped queries")
+        let denied = OpenAIClient(key: "fixture-secret", transport: { _ in (Data("fixture-secret private error".utf8), 403) })
+        do {
+            let _: [OpenAIClient.RemoteProject] = try await denied.list("projects")
+            check(false, "Reject denied reporting access")
+        } catch {
+            check(error.localizedDescription.contains("permissions") && !error.localizedDescription.contains("fixture-secret"),
+                  "Permission failures explain the issue without exposing credential or response contents")
+        }
+        let incomplete = OpenAIClient(key: "fixture", transport: { _ in
+            (Data(#"{"data":[],"has_more":true,"next_page":"repeated"}"#.utf8), 200)
+        })
+        do {
+            let _: [OpenAIClient.Bucket<OpenAIClient.Cost>] = try await incomplete.buckets("costs", since: month, until: month + 86400, groups: ["api_key_id"], limit: 180)
+            check(false, "Reject incomplete reporting pagination")
+        } catch { check(error.localizedDescription.contains("incomplete"), "Repeated page cursors cannot publish a partial total") }
+        let reportFolder = root.appendingPathComponent("reporting")
+        try fm.createDirectory(at: reportFolder, withIntermediateDirectories: true)
+        try JSONEncoder().encode(reporting).write(to: reportFolder.appendingPathComponent("openai-usage.json"))
+        let reportingStore = OpenAIUsageStore(support: reportFolder)
+        check(reportingStore.state.links["app"] == ["key_tally", "key_rotated"] && reportingStore.state.costs.count == 3,
+              "Persist key links and cached history outside project folders without any credential")
+        let encodedReporting = try JSONEncoder().encode(reporting)
+        check(!String(decoding: encodedReporting, as: UTF8.self).contains("fixture-key"),
+              "Reporting cache does not serialize the Admin API key")
         let remote = root.appendingPathComponent("remote.git").path
         let author = root.appendingPathComponent("author").path
         let reader = root.appendingPathComponent("reader").path
@@ -103,6 +170,12 @@
         check(gitFileDiff(diffRoot.path, file: "../outside").contains("outside the project"), "Keep diff previews inside the project")
         let oldDisk = try JSONDecoder().decode(DiskState.self, from: Data("{}".utf8))
         check(oldDisk.devices.isEmpty && oldDisk.signingRecords.isEmpty && oldDisk.deployments.isEmpty, "Older settings load with empty device tracking")
+        var oldDeployment = try JSONDecoder().decode(DeploymentConfig.self, from: Data(#"{"deviceID":"phone-id","scheme":"App","buildID":"build","artifactPath":""}"#.utf8))
+        check(oldDeployment.developmentTeam == nil && deploymentSigningArguments(oldDeployment).isEmpty,
+              "Existing deployments preserve project signing settings")
+        oldDeployment.developmentTeam = " TEAM123456 "
+        check(deploymentSigningArguments(oldDeployment) == ["DEVELOPMENT_TEAM=TEAM123456"],
+              "Local team override applies to the app and extensions in the build command")
         let deviceJSON = Data(#"{"result":{"devices":[{"identifier":"phone","properties":{"hardware":{"udid":"phone-id","reality":"physical","platform":"iOS","marketingName":"iPhone"},"state":{"name":"Test Phone"},"connection":{"state":"connected","pairingState":"paired"}}},{"identifier":"sim","properties":{"hardware":{"reality":"simulated"}}}]}}"#.utf8)
         let parsedDevices = try parseHopDevices(deviceJSON)
         check(parsedDevices.count == 1 && parsedDevices[0].id == "phone-id", "Discover physical devices and exclude simulators")
@@ -508,4 +581,36 @@
         print("All integration checks passed.")
         exit(0)
     } catch { fputs("FAIL: \(error)\n", stderr); exit(1) }
+}
+
+actor OpenAIReportingFixture {
+    let month: Int
+    var requests: [URLRequest] = []
+    init(month: Int) { self.month = month }
+    func send(_ request: URLRequest) throws -> (Data, Int) {
+        requests.append(request)
+        let url = request.url!
+        let params = URLComponents(url: url, resolvingAgainstBaseURL: false)!.queryItems ?? []
+        let after = params.first { $0.name == "after" }?.value
+        let page = params.first { $0.name == "page" }?.value
+        let json: String
+        if url.path == "/v1/organization/projects" {
+            json = after == nil ? #"{"data":[{"id":"proj_a","name":"Default"}],"has_more":true,"last_id":"proj_a"}"# : #"{"data":[{"id":"proj_b","name":"Other"}],"has_more":false}"#
+        } else if url.path == "/v1/organization/projects/proj_a/api_keys" {
+            json = after == nil ? #"{"data":[{"id":"key_tally","name":"Tally","created_at":1000}],"has_more":true,"last_id":"key_tally"}"# : #"{"data":[{"id":"key_split","name":"SplitTab","created_at":1001}],"has_more":false}"#
+        } else if url.path == "/v1/organization/projects/proj_b/api_keys" {
+            json = #"{"data":[{"id":"key_other","name":"Other","created_at":1002}],"has_more":false}"#
+        } else if url.path == "/v1/organization/costs" {
+            json = page == nil ? "{\"data\":[{\"start_time\":\(month-86400),\"results\":[{\"amount\":{\"value\":1.25,\"currency\":\"usd\"},\"api_key_id\":\"key_rotated\",\"project_id\":\"proj_a\"},{\"amount\":{\"value\":4,\"currency\":\"usd\"},\"api_key_id\":null}]}],\"has_more\":true,\"next_page\":\"second\"}" : "{\"data\":[{\"start_time\":\(month),\"results\":[{\"amount\":{\"value\":0.25,\"currency\":\"usd\"},\"api_key_id\":\"key_tally\"},{\"amount\":{\"value\":-0.1,\"currency\":\"usd\"},\"api_key_id\":\"key_tally\"}]}],\"has_more\":false}"
+        } else {
+            json = page == nil ? "{\"data\":[{\"start_time\":\(month),\"results\":[{\"api_key_id\":\"key_tally\",\"model\":\"test-model\",\"input_tokens\":100,\"output_tokens\":20,\"num_model_requests\":2}]}],\"has_more\":true,\"next_page\":\"second\"}" : "{\"data\":[{\"start_time\":\(month+86400),\"results\":[{\"api_key_id\":\"key_tally\",\"model\":\"test-model\",\"input_tokens\":50,\"output_tokens\":5,\"num_model_requests\":1}]}],\"has_more\":false}"
+        }
+        return (Data(json.utf8), 200)
+    }
+    func validRequests() -> Bool {
+        requests.allSatisfy { $0.httpMethod == "GET" && $0.url?.host == "api.openai.com" && $0.value(forHTTPHeaderField: "Authorization") == "Bearer fixture-key" } &&
+        requests.filter { $0.url!.path.hasSuffix("costs") || $0.url!.path.hasSuffix("completions") }.allSatisfy {
+            URLComponents(url: $0.url!, resolvingAgainstBaseURL: false)!.queryItems!.contains { $0.name == "group_by" && $0.value == "api_key_id" }
+        }
+    }
 }

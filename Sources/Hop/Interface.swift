@@ -319,14 +319,24 @@ struct RootView: View {
                                     Text("·")
                                     Text(p.changes == 0 ? "Clean" : "\(p.changes) changed").foregroundStyle(p.changes == 0 ? Color.secondary : Color.orange)
                                 } else { Text("Local project") }
+                                if p.xcode != nil {
+                                    Text("·")
+                                    ProjectDeploymentActions(store: store, project: p, compact: true, statusOnly: true)
+                                }
                             }.font(.system(size: 10)).foregroundStyle(.secondary)
                         }
                         Spacer(minLength: 0)
                         if pref.pinned { Image(systemName: "pin.fill").font(.system(size: 9)).foregroundStyle(.secondary) }
                         if running { Label("Running", systemImage: "circle.fill").font(.system(size: 9, weight: .medium)).foregroundStyle(.green).labelStyle(.titleAndIcon).help("A local service is running") }
-                        Image(systemName: isOpen ? "chevron.up" : "chevron.down").font(.system(size: 9)).foregroundStyle(.secondary)
                     }.contentShape(Rectangle())
                 }.buttonStyle(.plain)
+                OpenAIProjectSpending(usage: store.openAI, project: p) {
+                    store.showSettings?(p.id); store.projectPage = .overview
+                }
+                Button { withAnimation(.easeInOut(duration: 0.15)) { store.expanded = isOpen ? nil : p.id } } label: {
+                    Image(systemName: isOpen ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 9)).foregroundStyle(.secondary)
+                }.buttonStyle(.plain).accessibilityLabel(isOpen ? "Collapse project" : "Expand project")
                 Menu {
                     Button(pref.pinned ? "Unpin" : "Pin to top") { store.update(p) { $0.pinned.toggle() } }
                     MoveToFolderMenu(store: store, project: p)
@@ -342,10 +352,11 @@ struct RootView: View {
                     Button("Remove from Hop", role: .destructive) { store.removeProject(p) }
                 } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 18)
             }.padding(12)
-            if p.xcode != nil {
-                ProjectDeploymentActions(store: store, project: p, compact: true).padding(.horizontal, 12).padding(.bottom, 10)
+            if !p.branch.isEmpty {
+                GitActions(store: store, project: p)
+            } else {
+                OpenAIProjectCardFooter(store: store, usage: store.openAI, project: p)
             }
-            if !p.branch.isEmpty { GitActions(store: store, project: p) }
             if isOpen {
                 Divider().padding(.horizontal, 12)
                 VStack(alignment: .leading, spacing: 12) {
@@ -606,6 +617,7 @@ struct SettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
                 LoginItemSetting()
+                OpenAIConnectionSettings(usage: store.openAI)
                 if !store.pendingProjects.isEmpty {
                     GeneralSettingsCard(title: "Ready to review", subtitle: "Choose which new projects appear in your menu.", icon: "tray") {
                         ForEach(store.pendingProjects) { project in
@@ -779,6 +791,7 @@ struct ProjectSettings: View {
                     else { store.update(project) { $0.admission = .settingsOnly; $0.hidden = false } }
                 }))
             }
+            OpenAIProjectLinkSettings(usage: store.openAI, project: project)
             GeneralSettingsCard(title: "Open & launch", subtitle: "Your editor and deployed website.", icon: "arrow.up.forward.app") {
                 Picker("Editor", selection: field(\.editor)) { editorOptions }
                 serviceInput("Deployed website", text: field(\.website), prompt: "https://example.com")

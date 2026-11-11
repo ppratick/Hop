@@ -87,6 +87,7 @@ struct ProjectOverview: View {
                         ProjectDeploymentActions(store: store, project: project, compact: false)
                     }
                 }
+                OpenAIProjectUsageDetails(usage: store.openAI, project: project)
                 GeneralSettingsCard(title: "Launch workspace", subtitle: "Choose what opens, then launch it all together.", icon: "arrow.up.forward.app") {
                     ProjectLaunchActions(store: store, p: project)
                 }
