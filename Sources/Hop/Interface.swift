@@ -7,6 +7,7 @@ struct GeneralSettingsCard<Content: View>: View {
     let title: String
     let subtitle: String
     let icon: String
+    var headerLink: (title: String, destination: URL)? = nil
     @ViewBuilder var content: Content
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -21,6 +22,10 @@ struct GeneralSettingsCard<Content: View>: View {
                     Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
+                if let headerLink {
+                    Link(headerLink.title, destination: headerLink.destination)
+                        .font(.caption)
+                }
             }
             Divider().opacity(0.6)
             VStack(alignment: .leading, spacing: 10) { content }
@@ -132,24 +137,6 @@ func hopMark(size: CGFloat = 18, color: NSColor = .black) -> NSImage {
     }
     image.isTemplate = true
     return image
-}
-func writeAppIcon(to path: String) {
-    guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1024, pixelsHigh: 1024, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0), let context = NSGraphicsContext(bitmapImageRep: bitmap) else { return }
-    NSGraphicsContext.saveGraphicsState(); NSGraphicsContext.current = context
-    NSColor.clear.setFill(); NSRect(x: 0, y: 0, width: 1024, height: 1024).fill()
-    let tile = NSBezierPath(roundedRect: NSRect(x: 64, y: 64, width: 896, height: 896), xRadius: 210, yRadius: 210)
-    NSGradient(
-        starting: NSColor(calibratedRed: 0.06, green: 0.26, blue: 0.78, alpha: 1),
-        ending: NSColor(calibratedRed: 0.20, green: 0.60, blue: 1.0, alpha: 1)
-    )?.draw(in: tile, angle: 90)
-    let rim = NSBezierPath(roundedRect: NSRect(x: 66, y: 66, width: 892, height: 892), xRadius: 208, yRadius: 208)
-    NSColor.white.withAlphaComponent(0.18).setStroke()
-    rim.lineWidth = 3
-    rim.stroke()
-    let mark = hopMark(size: 620, color: .white); mark.isTemplate = false
-    mark.draw(in: NSRect(x: 171, y: 202, width: 620, height: 620))
-    NSGraphicsContext.restoreGraphicsState()
-    if let data = bitmap.representation(using: .png, properties: [:]) { try? data.write(to: URL(fileURLWithPath: path)) }
 }
 
 private struct HopGlass: ViewModifier {
@@ -797,9 +784,9 @@ struct ProjectSettings: View {
                 serviceInput("Deployed website", text: field(\.website), prompt: "https://example.com")
             }
             if project.xcode != nil {
-                GeneralSettingsCard(title: "Device installation", subtitle: "Build, install, and check signing validity.", icon: "iphone") {
+                GeneralSettingsCard(title: "App installation", subtitle: "Build and install on your Mac or device.", icon: project.platforms.contains("macOS") ? "desktopcomputer" : "iphone") {
                     if let config = store.disk.deployments[project.id] {
-                        LabeledContent("Device", value: store.disk.devices.first(where: { $0.id == config.deviceID })?.name ?? "Selected device")
+                        LabeledContent("Device", value: store.deploymentDeviceName(config.deviceID))
                         LabeledContent("Scheme", value: config.scheme)
                     }
                     Button("Choose device & scheme…") { store.configureDeployment(project) }

@@ -3,3 +3,5 @@
 .swiftpm/
 *.app/
 DerivedData/
+xcuserdata/
+*.xcuserstate

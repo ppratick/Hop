@@ -660,8 +660,13 @@ if CommandLine.arguments.count >= 3 && CommandLine.arguments[1] == "--run-servic
     exit(127)
 } else if CommandLine.arguments.count == 4 && CommandLine.arguments[1] == "--terminal-service" {
     runTerminalService(command: CommandLine.arguments[2], state: URL(fileURLWithPath: CommandLine.arguments[3]))
-} else if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--write-icon" {
-    writeAppIcon(to: CommandLine.arguments[2])
+} else if CommandLine.arguments.count == 5 && CommandLine.arguments[1] == "--install-mac-app" {
+    do {
+        _ = try installMacApp(URL(fileURLWithPath: CommandLine.arguments[2]),
+                              in: URL(fileURLWithPath: CommandLine.arguments[3]), name: CommandLine.arguments[4])
+    } catch {
+        fputs("Installation failed: \(error.localizedDescription)\n", stderr); exit(1)
+    }
 } else if CommandLine.arguments.contains("--scan") {
     let root = CommandLine.arguments.last!
     for p in scan(root) { print("\(p.title) | \(p.branch) | \(p.changes) changes | \(p.github) | \(p.suggested.map(\.command).joined(separator: ", "))") }

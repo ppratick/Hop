@@ -32,12 +32,13 @@ struct SigningRecord: Codable, Identifiable {
     var artifactPath: String
     var installedByHop: Bool? = nil
     func remaining(at now: Date = Date()) -> String {
+        if !profileBased { return "Installed" }
         let seconds = expiresAt.timeIntervalSince(now)
         if seconds <= 0 { return "Expired" }
         if seconds < 86400 { return "\(max(1, Int(ceil(seconds / 3600))))h remaining" }
         return "\(Int(ceil(seconds / 86400))) days remaining"
     }
-    var tint: Color { expiresAt <= Date() ? .red : expiresAt.timeIntervalSinceNow < 172800 ? .orange : .blue }
+    var tint: Color { !profileBased ? .green : expiresAt <= Date() ? .red : expiresAt.timeIntervalSinceNow < 172800 ? .orange : .blue }
 }
 
 struct SigningProfile {

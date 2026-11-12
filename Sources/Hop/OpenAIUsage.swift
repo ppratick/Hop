@@ -369,7 +369,8 @@ struct OpenAIConnectionSettings: View {
     @ObservedObject var usage: OpenAIUsageStore
     @State private var key = ""
     var body: some View {
-        GeneralSettingsCard(title: "OpenAI", subtitle: "Spending & usage", icon: "chart.bar") {
+        GeneralSettingsCard(title: "OpenAI", subtitle: "Spending & usage", icon: "chart.bar",
+                            headerLink: ("Open billing", URL(string: "https://platform.openai.com/settings/organization/billing/overview")!)) {
             if usage.state.connected {
                 HStack {
                     Text("Connected").foregroundStyle(.secondary)

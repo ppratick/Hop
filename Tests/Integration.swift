@@ -227,6 +227,55 @@
         }
         let selectedDeviceApp = try builtDeviceApp(in: derivedFixture, preferredBundle: "com.example.app", scheme: "Fixture")
         check(selectedDeviceApp.resolvingSymlinksInPath().path == deviceApp.resolvingSymlinksInPath().path, "Select device build and exclude simulator products")
+        let macConfig = DeploymentConfig(deviceID: localMacDeviceID, scheme: "MacFixture")
+        check(macConfig.isMac && deploymentDestination(macConfig) == "platform=macOS" &&
+              deploymentDestination(oldDeployment) == "id=phone-id", "Use the local Mac destination without changing device builds")
+        let macProducts = root.appendingPathComponent("Mac products with spaces")
+        let macApp = macProducts.appendingPathComponent("Custom Product.app")
+        try fm.createDirectory(at: macApp.appendingPathComponent("Contents/MacOS"), withIntermediateDirectories: true)
+        let macInfo: [String: Any] = ["CFBundleIdentifier": "com.example.macfixture", "CFBundlePackageType": "APPL", "CFBundleExecutable": "Fixture"]
+        try PropertyListSerialization.data(fromPropertyList: macInfo, format: .xml, options: 0).write(to: macApp.appendingPathComponent("Contents/Info.plist"))
+        let macExecutable = macApp.appendingPathComponent("Contents/MacOS/Fixture")
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: macExecutable)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: macExecutable.path)
+        let macSettings: [[String: Any]] = [["target": "MacFixture", "buildSettings": [
+            "PLATFORM_NAME": "macosx", "WRAPPER_EXTENSION": "app", "PRODUCT_TYPE": "com.apple.product-type.application",
+            "TARGET_BUILD_DIR": macProducts.path, "FULL_PRODUCT_NAME": "Custom Product.app"]]]
+        let macProduct = try macBuildProduct(JSONSerialization.data(withJSONObject: macSettings), scheme: "MacFixture")
+        check(macProduct.path == macApp.path, "Resolve the selected scheme’s Mac app with custom names and paths")
+        do {
+            _ = try macBuildProduct(Data("[]".utf8), scheme: "Library")
+            check(false, "Reject schemes without a macOS app")
+        } catch { check(true, "Reject schemes without a macOS app") }
+        let applications = root.appendingPathComponent("Test Applications")
+        let installedMac = try installMacApp(macApp, in: applications)
+        let installedBundleID = try macAppBundleID(installedMac)
+        check(installedBundleID == "com.example.macfixture", "Install a Mac app with its bundle contents intact")
+        try Data("old".utf8).write(to: installedMac.appendingPathComponent("obsolete.txt"))
+        try Data("new".utf8).write(to: macApp.appendingPathComponent("new.txt"))
+        _ = try installMacApp(macApp, in: applications)
+        check(!fm.fileExists(atPath: installedMac.appendingPathComponent("obsolete.txt").path) &&
+              fm.fileExists(atPath: installedMac.appendingPathComponent("new.txt").path), "Replace the full Mac app atomically without leaving obsolete files")
+        let otherApp = applications.appendingPathComponent("Other.app")
+        try fm.createDirectory(at: otherApp, withIntermediateDirectories: true)
+        try Data("keep".utf8).write(to: otherApp.appendingPathComponent("original.txt"))
+        do {
+            _ = try installMacApp(macApp, in: applications, name: "Other.app")
+            check(false, "Protect an unrelated app from replacement")
+        } catch {
+            check(fm.fileExists(atPath: otherApp.appendingPathComponent("original.txt").path), "Protect an unrelated app from replacement")
+        }
+        let linkedApp = applications.appendingPathComponent("Link.app")
+        try fm.createSymbolicLink(at: linkedApp, withDestinationURL: installedMac)
+        do {
+            _ = try installMacApp(macApp, in: applications, name: "Link.app")
+            check(false, "Reject symbolic-link installation destinations")
+        } catch { check(true, "Reject symbolic-link installation destinations") }
+        let applicationFiles = try fm.contentsOfDirectory(atPath: applications.path)
+        check(applicationFiles.allSatisfy { !$0.hasPrefix(".hop-install-") }, "Remove staged app copies after installation")
+        let macRecord = SigningRecord(projectID: "mac", deviceID: localMacDeviceID, bundleID: "com.example.macfixture",
+                                      installedAt: Date(), expiresAt: .distantFuture, profileBased: false, artifactPath: installedMac.path)
+        check(macRecord.remaining() == "Installed", "Show Mac installation status without inventing a provisioning countdown")
         let commandLog = root.appendingPathComponent("command-test.log")
         _ = try deploymentCommand(Process(), arguments: ["--version"], log: commandLog, timeout: 10)
         check(fm.fileExists(atPath: commandLog.path), "Capture deployment command logs outside project files")

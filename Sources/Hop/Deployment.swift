@@ -105,7 +105,10 @@ func installationRecord(project: Project, deviceID: String, app: URL) throws -> 
 extension Store {
     var deploymentBusy: Bool { deploymentProjectID != nil }
     func deploymentAvailable(_ deviceID: String) -> Bool {
-        discoveredDevices.contains { $0.id == deviceID && ["connected", "disconnected"].contains($0.state) }
+        deviceID == localMacDeviceID || discoveredDevices.contains { $0.id == deviceID && ["connected", "disconnected"].contains($0.state) }
+    }
+    func deploymentDeviceName(_ deviceID: String) -> String {
+        deviceID == localMacDeviceID ? "This Mac" : disk.devices.first { $0.id == deviceID }?.name ?? "Selected device"
     }
     func configureDeployment(_ project: Project) {
         let previousPage = projectPage
@@ -121,10 +124,12 @@ extension Store {
         deploymentStatus[project.id] = "Checking device…"
         Task { [self] in
             do {
-                let found = try await Task.detached { try discoverHopDevices() }.value
-                discoveredDevices = found; devicesCheckedAt = Date()
-                guard found.contains(where: { $0.id == config.deviceID && ["connected", "disconnected"].contains($0.state) }) else {
-                    throw DeviceTrackingError.message("Connect the selected device and unlock it, then try again.")
+                if !config.isMac {
+                    let found = try await Task.detached { try discoverHopDevices() }.value
+                    discoveredDevices = found; devicesCheckedAt = Date()
+                    guard found.contains(where: { $0.id == config.deviceID && ["connected", "disconnected"].contains($0.state) }) else {
+                        throw DeviceTrackingError.message("Connect the selected device and unlock it, then try again.")
+                    }
                 }
                 let base = support.appendingPathComponent("DeviceBuilds/" + config.buildID)
                 try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
@@ -133,25 +138,49 @@ extension Store {
                 deploymentStatus[project.id] = "Building & updating signing…"
                 let process = Process(); deploymentProcess = process
                 let args = ["xcodebuild"] + (try xcodeContainerArguments(project)) +
-                    ["-scheme", config.scheme, "-configuration", "Debug", "-destination", "id=" + config.deviceID,
+                    ["-scheme", config.scheme, "-configuration", "Debug", "-destination", deploymentDestination(config),
                      "-derivedDataPath", base.appendingPathComponent("DerivedData").path,
-                     "-allowProvisioningUpdates", "-allowProvisioningDeviceRegistration", "build"] + deploymentSigningArguments(config)
-                _ = try await Task.detached { try deploymentCommand(process, arguments: args, log: log) }.value
-                let record = try await Task.detached {
-                    let app = try builtDeviceApp(in: base.appendingPathComponent("DerivedData"), preferredBundle: xcodeAppBundleID(project), scheme: config.scheme)
-                    return try installationRecord(project: project, deviceID: config.deviceID, app: app)
-                }.value
-                // A successful build is useful even when subsequent installation fails.
-                disk.deployments[project.id]?.artifactPath = record.artifactPath
-                save()
-                deploymentStatus[project.id] = "Installing…"
-                let installer = Process(); deploymentProcess = installer
-                let installLog = base.appendingPathComponent("install.log")
-                deploymentLogs[project.id] = installLog
-                _ = try await Task.detached {
-                    try deploymentCommand(installer, arguments: ["devicectl", "device", "install", "app", "--device", config.deviceID,
-                                                                record.artifactPath, "--timeout", "120"], log: installLog, timeout: 140)
-                }.value
+                     "-allowProvisioningUpdates"] + (config.isMac ? [] : ["-allowProvisioningDeviceRegistration"]) + deploymentSigningArguments(config)
+                _ = try await Task.detached { try deploymentCommand(process, arguments: args + ["build"], log: log) }.value
+                let record: SigningRecord
+                if config.isMac {
+                    let settingsProcess = Process(); deploymentProcess = settingsProcess
+                    let settings = try await Task.detached {
+                        try deploymentCommand(settingsProcess, arguments: args + ["-showBuildSettings", "-json"],
+                                              log: base.appendingPathComponent("settings.log"), timeout: 90)
+                    }.value
+                    let app = try macBuildProduct(settings, scheme: config.scheme)
+                    disk.deployments[project.id]?.artifactPath = app.path; save()
+                    deploymentStatus[project.id] = "Installing…"
+                    let verify = Process(); deploymentProcess = verify
+                    let installLog = base.appendingPathComponent("install.log")
+                    deploymentLogs[project.id] = installLog
+                    _ = try await Task.detached {
+                        try deploymentCommand(verify, arguments: ["codesign", "--verify", "--deep", "--strict", app.path], log: installLog, timeout: 60)
+                    }.value
+                    let installed = try await Task.detached {
+                        try installMacApp(app, in: macInstallationDirectory(for: app))
+                    }.value
+                    record = SigningRecord(projectID: project.id, deviceID: config.deviceID, bundleID: try macAppBundleID(installed),
+                                           installedAt: Date(), expiresAt: .distantFuture, profileBased: false,
+                                           artifactPath: installed.path, installedByHop: true)
+                } else {
+                    record = try await Task.detached {
+                        let app = try builtDeviceApp(in: base.appendingPathComponent("DerivedData"), preferredBundle: xcodeAppBundleID(project), scheme: config.scheme)
+                        return try installationRecord(project: project, deviceID: config.deviceID, app: app)
+                    }.value
+                    // A successful build is useful even when subsequent installation fails.
+                    disk.deployments[project.id]?.artifactPath = record.artifactPath
+                    save()
+                    deploymentStatus[project.id] = "Installing…"
+                    let installer = Process(); deploymentProcess = installer
+                    let installLog = base.appendingPathComponent("install.log")
+                    deploymentLogs[project.id] = installLog
+                    _ = try await Task.detached {
+                        try deploymentCommand(installer, arguments: ["devicectl", "device", "install", "app", "--device", config.deviceID,
+                                                                    record.artifactPath, "--timeout", "120"], log: installLog, timeout: 140)
+                    }.value
+                }
                 var installed = record; installed.installedAt = Date()
                 disk.signingRecords.removeAll { $0.projectID == project.id && $0.deviceID == config.deviceID }
                 disk.signingRecords.append(installed); save()
@@ -180,6 +209,7 @@ struct ProjectDeploymentActions: View {
     @State private var localProfile: SigningProfile?
     @State private var showingDetails = false
     var config: DeploymentConfig? { store.disk.deployments[project.id] }
+    var isMac: Bool { config?.isMac ?? (project.platforms == ["macOS"]) }
     var record: SigningRecord? {
         store.disk.signingRecords.first { $0.projectID == project.id && $0.deviceID == config?.deviceID && $0.installedByHop == true }
     }
@@ -202,12 +232,12 @@ struct ProjectDeploymentActions: View {
         }
         .task(id: (config?.artifactPath ?? "") + "|" + (config?.deviceID ?? "")) {
             localProfile = nil
-            if let config, !config.artifactPath.isEmpty {
+            if let config, !config.isMac, !config.artifactPath.isEmpty {
                 let path = config.artifactPath
                 let profile = await Task.detached { try? loadSigningProfile(URL(fileURLWithPath: path)) }.value
                 if !Task.isCancelled, let profile, profile.devices.contains(config.deviceID) { localProfile = profile }
             }
-            if !statusOnly && (store.devicesCheckedAt == nil || Date().timeIntervalSince(store.devicesCheckedAt!) > 120) { store.discoverDevices() }
+            if !isMac && !statusOnly && (store.devicesCheckedAt == nil || Date().timeIntervalSince(store.devicesCheckedAt!) > 120) { store.discoverDevices() }
         }
     }
     private var signingStatus: some View {
@@ -217,12 +247,12 @@ struct ProjectDeploymentActions: View {
                     Text(displayRecord.remaining(at: tick.date))
                         .foregroundStyle(displayRecord.tint)
                 }
-                .help((record == nil ? "Local build profile; installation not verified. " : "Installed app signing. ") +
+                .help(!displayRecord.profileBased ? "Installed at " + displayRecord.artifactPath : (record == nil ? "Local build profile; installation not verified. " : "Installed app signing. ") +
                       "Expires " + displayRecord.expiresAt.formatted(date: .abbreviated, time: .shortened))
             }
             else {
-                Text("Expiry unknown").foregroundStyle(.secondary)
-                    .help("Build and install to record the app’s signing expiration.")
+                Text(isMac ? "Not installed by Hop" : "Expiry unknown").foregroundStyle(.secondary)
+                    .help(isMac ? "Build and install this app on your Mac." : "Build and install to record the app’s signing expiration.")
             }
         }.lineLimit(1)
     }
@@ -241,7 +271,7 @@ struct ProjectDeploymentActions: View {
                 .buttonStyle(.borderless)
                 .disabled(store.deploymentBusy || (config.map { !store.deploymentAvailable($0.deviceID) } ?? false))
                 .help(config.map { config in
-                    let device = store.disk.devices.first { $0.id == config.deviceID }?.name ?? "selected device"
+                    let device = store.deploymentDeviceName(config.deviceID)
                     return store.deploymentAvailable(config.deviceID) ? "Build & install on " + device : "Connect " + device + " to install"
                 } ?? "Choose device & scheme to build and install")
             }
@@ -261,17 +291,17 @@ struct ProjectDeploymentActions: View {
     }
     private var details: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if displayRecord == nil {
+            if displayRecord == nil && !isMac {
                 Text("Expiry unknown").font(.caption).foregroundStyle(.secondary)
                     .help("Build and install to record the app’s signing expiration.")
             }
             if let config {
                 HStack(spacing: 8) {
-                    Image(systemName: store.disk.devices.first(where: { $0.id == config.deviceID })?.symbol ?? "iphone")
+                    Image(systemName: config.isMac ? "desktopcomputer" : store.disk.devices.first(where: { $0.id == config.deviceID })?.symbol ?? "iphone")
                         .foregroundStyle(.blue).frame(width: compact ? 20 : 28, height: compact ? 22 : 30)
                         .background(.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(store.disk.devices.first(where: { $0.id == config.deviceID })?.name ?? "Selected device")
+                        Text(store.deploymentDeviceName(config.deviceID))
                             .fontWeight(.medium).lineLimit(1)
                         if !compact { Text(config.scheme).font(.system(size: 10)).foregroundStyle(.secondary) }
                     }
@@ -281,7 +311,7 @@ struct ProjectDeploymentActions: View {
                             Text(displayRecord.remaining(at: tick.date))
                                 .font(.system(size: compact ? 9 : 11, weight: .medium))
                                 .foregroundStyle(displayRecord.tint)
-                        }.help("Expires " + displayRecord.expiresAt.formatted(date: .abbreviated, time: .shortened))
+                        }.help(displayRecord.profileBased ? "Expires " + displayRecord.expiresAt.formatted(date: .abbreviated, time: .shortened) : "Installed at " + displayRecord.artifactPath)
                     }
                     Button { store.configureDeployment(project) } label: {
                         Image(systemName: "slider.horizontal.3").font(.system(size: 12, weight: .medium))
@@ -302,7 +332,7 @@ struct ProjectDeploymentActions: View {
                             .disabled(!store.deploymentAvailable(config.deviceID) || store.deploymentBusy)
                         Spacer(minLength: 0)
                     }
-                    if let displayRecord {
+                    if let displayRecord, displayRecord.profileBased {
                         HStack(alignment: .firstTextBaseline) {
                             Text("Expires " + displayRecord.expiresAt.formatted(date: .abbreviated, time: .shortened))
                                 .font(.system(size: compact ? 9 : 10)).foregroundStyle(.secondary)
@@ -310,6 +340,14 @@ struct ProjectDeploymentActions: View {
                         }
                         if record == nil {
                             Text("Local build profile · installation not verified").font(.system(size: 9)).foregroundStyle(.secondary)
+                        }
+                    }
+                    if config.isMac {
+                        Text("Quit and reopen running apps to use the installed update.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        if let record {
+                            Button("Show installed app") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: record.artifactPath)]) }
+                                .buttonStyle(.borderless).font(.caption)
                         }
                     }
                     if let log = store.deploymentLogs[project.id] {
@@ -354,15 +392,18 @@ struct DeploymentSetup: View {
     @State private var loading = true
     @State private var error = ""
     @State private var detectedArtifact = ""
+    var supportsMac: Bool { project.platforms.contains("macOS") }
+    var macOnly: Bool { project.platforms == ["macOS"] }
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("Build & Install").font(.title2.bold())
             Text(store.name(project)).foregroundStyle(.secondary)
             Picker("Device", selection: $deviceID) {
                 Text("Choose a device").tag("")
-                ForEach(store.disk.devices) { Text($0.name).tag($0.id) }
+                if supportsMac { Text("This Mac").tag(localMacDeviceID) }
+                if !macOnly { ForEach(store.disk.devices) { Text($0.name).tag($0.id) } }
             }
-            if store.disk.devices.isEmpty {
+            if store.disk.devices.isEmpty && !supportsMac {
                 Text("Enable a device in Settings → Devices first.").font(.caption).foregroundStyle(.secondary)
             }
             Picker("App scheme", selection: $scheme) {
@@ -374,7 +415,7 @@ struct DeploymentSetup: View {
                 .font(.caption).foregroundStyle(.secondary)
             if loading { ProgressView().controlSize(.small) }
             if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.orange) }
-            Text("Each build lets Xcode update signing automatically, then installs the app and records the actual profile expiration.")
+            Text(deviceID == localMacDeviceID ? "Builds for this Mac and installs in Applications. Quit and reopen running apps to use updates." : "Each build lets Xcode update signing automatically, then installs the app and records the actual profile expiration.")
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button("Cancel") { dismiss() }
@@ -386,7 +427,7 @@ struct DeploymentSetup: View {
                         config = DeploymentConfig(deviceID: deviceID, scheme: scheme)
                     }
                     config.developmentTeam = team.isEmpty ? nil : team
-                    if config.artifactPath.isEmpty { config.artifactPath = detectedArtifact }
+                    if config.artifactPath.isEmpty && !config.isMac { config.artifactPath = detectedArtifact }
                     store.disk.deployments[project.id] = config
                     store.save(); dismiss()
                 }.buttonStyle(.borderedProminent).disabled(deviceID.isEmpty || !schemes.contains(scheme) || loading || store.deploymentBusy)
@@ -396,6 +437,7 @@ struct DeploymentSetup: View {
             if let config = store.disk.deployments[project.id] {
                 deviceID = config.deviceID; scheme = config.scheme; developmentTeam = config.developmentTeam ?? ""
             }
+            else if supportsMac { deviceID = localMacDeviceID }
             else if store.disk.devices.count == 1 { deviceID = store.disk.devices[0].id }
             do {
                 schemes = try await Task.detached { try deploymentSchemes(project) }.value
@@ -408,7 +450,7 @@ struct DeploymentSetup: View {
             loading = false
         }
         .task(id: deviceID + "|" + scheme) {
-            guard !deviceID.isEmpty, !scheme.isEmpty else { detectedArtifact = ""; return }
+            guard !deviceID.isEmpty, deviceID != localMacDeviceID, !scheme.isEmpty else { detectedArtifact = ""; return }
             let device = deviceID
             let selectedScheme = scheme
             let artifact = await Task.detached {

@@ -83,7 +83,7 @@ struct ProjectOverview: View {
                     }
                 }
                 if project.xcode != nil {
-                    GeneralSettingsCard(title: "Build & install", subtitle: "Your device, app build, and signing validity.", icon: "iphone") {
+                    GeneralSettingsCard(title: "Build & install", subtitle: "Your device, app build, and installation.", icon: project.platforms.contains("macOS") ? "desktopcomputer" : "iphone") {
                         ProjectDeploymentActions(store: store, project: project, compact: false)
                     }
                 }
