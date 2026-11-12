@@ -22,19 +22,34 @@ func xcodeContainerArguments(_ project: Project) throws -> [String] {
 }
 
 // Called on a worker task; output goes to Hop's support folder, never the project.
-func deploymentCommand(_ process: Process, arguments: [String], log: URL, timeout: Double = 900) throws -> Data {
+func deploymentCommand(_ process: Process, arguments: [String], log: URL, timeout: Double = 900, standardOutputOnly: Bool = false) throws -> Data {
     process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
     process.arguments = arguments
     let pipe = Pipe()
-    process.standardOutput = pipe; process.standardError = pipe
+    process.standardOutput = pipe
+    let errorLog = log.deletingLastPathComponent().appendingPathComponent(".stderr-" + UUID().uuidString)
+    var errorHandle: FileHandle?
+    defer {
+        try? errorHandle?.close()
+        if standardOutputOnly { try? FileManager.default.removeItem(at: errorLog) }
+    }
+    if standardOutputOnly {
+        try Data().write(to: errorLog)
+        errorHandle = try FileHandle(forWritingTo: errorLog)
+        process.standardError = errorHandle
+    } else {
+        process.standardError = pipe
+    }
     try process.run()
     let deadline = DispatchWorkItem { if process.isRunning { process.terminate() } }
     DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: deadline)
     let data = pipe.fileHandleForReading.readDataToEndOfFile()
     process.waitUntilExit(); deadline.cancel()
-    try data.write(to: log, options: .atomic)
+    let diagnostics = standardOutputOnly ? try Data(contentsOf: errorLog) : Data()
+    let loggedData = diagnostics + data
+    try loggedData.write(to: log, options: .atomic)
     guard process.terminationStatus == 0 else {
-        let tail = String(decoding: data.suffix(1800), as: UTF8.self)
+        let tail = String(decoding: loggedData.suffix(1800), as: UTF8.self)
         throw DeviceTrackingError.message("Command failed. " + tail)
     }
     return data
@@ -45,7 +60,7 @@ func deploymentSchemes(_ project: Project) throws -> [String] {
     try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: temp) }
     let data = try deploymentCommand(Process(), arguments: ["xcodebuild"] + xcodeContainerArguments(project) + ["-list", "-json", "-disableAutomaticPackageResolution"],
-                                     log: temp.appendingPathComponent("schemes.log"), timeout: 60)
+                                     log: temp.appendingPathComponent("schemes.log"), timeout: 60, standardOutputOnly: true)
     // xcodebuild can print diagnostic text before its JSON.
     let text = String(decoding: data, as: UTF8.self)
     guard let start = text.firstIndex(of: "{"),
@@ -145,9 +160,11 @@ extension Store {
                 let record: SigningRecord
                 if config.isMac {
                     let settingsProcess = Process(); deploymentProcess = settingsProcess
+                    let settingsLog = base.appendingPathComponent("settings.log")
+                    deploymentLogs[project.id] = settingsLog
                     let settings = try await Task.detached {
                         try deploymentCommand(settingsProcess, arguments: args + ["-showBuildSettings", "-json"],
-                                              log: base.appendingPathComponent("settings.log"), timeout: 90)
+                                              log: settingsLog, timeout: 90, standardOutputOnly: true)
                     }.value
                     let app = try macBuildProduct(settings, scheme: config.scheme)
                     disk.deployments[project.id]?.artifactPath = app.path; save()

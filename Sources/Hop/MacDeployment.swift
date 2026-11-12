@@ -13,7 +13,7 @@ func deploymentDestination(_ config: DeploymentConfig) -> String {
 
 // Read the selected scheme's actual app product, including custom product names and build directories.
 func macBuildProduct(_ data: Data, scheme: String) throws -> URL {
-    guard let targets = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+    guard let targets = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else {
         throw DeviceTrackingError.message("Couldn’t read the Mac app’s build settings.")
     }
     let apps = targets.filter { target in

@@ -279,6 +279,20 @@
         let commandLog = root.appendingPathComponent("command-test.log")
         _ = try deploymentCommand(Process(), arguments: ["--version"], log: commandLog, timeout: 10)
         check(fm.fileExists(atPath: commandLog.path), "Capture deployment command logs outside project files")
+        let jsonOutput = try deploymentCommand(Process(), arguments: ["sh", "-c", "printf 'Xcode destination warning\\n' >&2; printf '[]\\n'"],
+                                               log: commandLog, timeout: 10, standardOutputOnly: true)
+        let decodedOutput = try JSONSerialization.jsonObject(with: jsonOutput) as? [Any]
+        let diagnosticLog = try String(contentsOf: commandLog, encoding: .utf8)
+        check(decodedOutput?.isEmpty == true && diagnosticLog.contains("Xcode destination warning") && diagnosticLog.contains("[]"),
+              "Keep Xcode warnings out of JSON while preserving diagnostics in the log")
+        let logFiles = try fm.contentsOfDirectory(atPath: root.path)
+        check(logFiles.allSatisfy { !$0.hasPrefix(".stderr-") }, "Clean up temporary command diagnostic files")
+        do {
+            _ = try macBuildProduct(Data("not JSON".utf8), scheme: "MacFixture")
+            check(false, "Explain malformed Mac build settings")
+        } catch {
+            check(error.localizedDescription.contains("build settings"), "Explain malformed Mac build settings")
+        }
         do {
             _ = try deploymentCommand(Process(), arguments: ["--find", "hop-nonexistent-test-tool"], log: commandLog, timeout: 10)
             check(false, "Propagate failed deployment commands")
