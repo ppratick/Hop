@@ -3,9 +3,10 @@
 A native macOS menu-bar workspace for your development projects. Open projects in your editor or Terminal, inspect Git changes, run local services, and manage builds and deployments from one place.
 
 <p align="center">
-  <img src="docs/images/project-overview.png" width="720" alt="Hop's project overview with Git status and launch options">
+  <img src="docs/images/menu-bar.png" height="360" alt="Hop's menu-bar panel listing projects with Git status">
+  <img src="docs/images/project-overview.png" height="360" alt="Hop's project overview with Git status and launch options">
 </p>
-<p align="center"><sub>Screenshot shows sample projects created for this README.</sub></p>
+<p align="center"><sub>Screenshots show sample projects created for this README.</sub></p>
 
 ## Features
 
