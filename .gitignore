@@ -41,3 +41,6 @@ Pairing.plist
 !.env.*.example
 !*.env.example
 !.dev.vars.example
+
+# Personal Xcode signing overrides
+Signing.local.xcconfig

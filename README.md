@@ -49,6 +49,18 @@ zsh test.sh
 
 The integration runner creates its fixtures and compiler cache in a temporary directory.
 
+## Signing your own build
+
+The project reads `Signing.xcconfig` and an optional, ignored `Signing.local.xcconfig`. Configure your identity once for all targets:
+
+```sh
+cp Signing.local.xcconfig.example Signing.local.xcconfig
+```
+
+Edit `APP_BUNDLE_IDENTIFIER` to a unique identifier you control. Hop’s default local ad-hoc Mac build does not need an Apple Team; `DEVELOPMENT_TEAM` is available for your own signing setup. Keep the local file out of Git. Command-line build-setting overrides still work.
+
+For an update to an existing installation, retain its bundle identifier and signing team so it keeps the same app identity and access to its saved data. Do not overwrite an existing local signing file with the example.
+
 ## License
 
 [MIT](LICENSE). The app is free to use and modify. Optional third-party services may have their own charges and terms.
